@@ -11,6 +11,7 @@ import { BotKeyword } from '../bot_keywords/entities/bot_keyword.entity';
 import { BotSetting } from '../bot_settings/entities/bot_setting.entity';
 import { ChatLog } from '../chat_logs/entities/chat_log.entity';
 import { Lead } from 'src/leads/lead.entity';
+import { Quote } from 'src/quotes/entities/quote.entity';
 
 @Injectable()
 export class WhatsappService {
@@ -30,6 +31,8 @@ export class WhatsappService {
     private chatLogRepository: Repository<ChatLog>,
     @InjectRepository(Lead)
     private leadRepository: Repository<Lead>,
+    @InjectRepository(Quote)
+    private quoteRepository: Repository<Quote>,
   ) {}
 
   async initWhatsAppClient(whatsappPhone: string) {
@@ -140,7 +143,7 @@ export class WhatsappService {
 
       let botResponseText = '';
 
-      // 0. VERIFICAR SI ES EL PRIMER MENSAJE DE ESTE NÚMERO (BIENESTAR / BIENVENIDA AUTOMÁTICA)
+      // 0. VERIFICAR SI ES EL PRIMER MENSAJE DE ESTE NÚMERO (BIENVENIDA AUTOMÁTICA)
       const previousChatsCount = await this.chatLogRepository.count({
         where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
       });
@@ -155,7 +158,7 @@ export class WhatsappService {
           bot_response: botResponseText,
           whatsapp_phone: whatsappPhone,
         });
-        return; // Terminamos aquí para saludar corporativamente sin disparar otras reglas de golpe
+        return; 
       }
 
       // 1. Verificamos si este chat ya fue liberado para un asesor humano (assigned_to_human)
@@ -164,11 +167,10 @@ export class WhatsappService {
       });
 
       if (lead && lead.conversation_state === 'assigned_to_human') {
-        // El bot ya cumplió su ciclo y está en manos del asesor, no interviene más
         return;
       }
 
-      // 2. Si está en proceso de recopilar el Nombre
+      // 2. Si está en proceso de recopilar el Nombre para Lead de asesor
       if (lead && lead.conversation_state === 'collecting_name') {
         lead.client_name = incomingText;
         lead.conversation_state = 'collecting_company';
@@ -182,7 +184,7 @@ export class WhatsappService {
       // 3. Si está en proceso de recopilar la Empresa / Compañía
       if (lead && lead.conversation_state === 'collecting_company') {
         lead.company_name = incomingText;
-        lead.conversation_state = 'assigned_to_human'; // <-- Liberamos el chat por completo para el asesor
+        lead.conversation_state = 'assigned_to_human'; 
         await this.leadRepository.save(lead);
 
         botResponseText = `¡Gracias por la información! En unos momentos un asesor se comunicará contigo.`;
@@ -190,8 +192,53 @@ export class WhatsappService {
         return;
       }
 
-      // 4. Detectar palabras clave especiales de asociados / representantes / socios / asesor
-      // 4.1 COMANDO INTELIGENTE DE AYUDA / MENÚ AUTOMÁTICO
+      // NUEVO: 3.5. Si el usuario está en proceso de dar su nombre para una COTIZACIÓN
+      let pendingQuote = await this.quoteRepository.findOne({
+        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
+      });
+
+      if (pendingQuote) {
+        // Guardamos el nombre real que proporcionó el cliente
+        pendingQuote.client_name = incomingText;
+        pendingQuote.status = 'Pendiente'; // Pasamos la cotización a estatus pendiente normal
+        await this.quoteRepository.save(pendingQuote);
+
+        botResponseText = `¡Gracias, ${incomingText}! Ahora por favor indícanos qué productos y cantidades necesitas cotizar:`;
+        await msg.reply(botResponseText);
+
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: botResponseText,
+          whatsapp_phone: whatsappPhone,
+        });
+        return;
+      }
+
+      // Si el cliente ya dio su nombre y ahora está escribiendo los productos para la cotización pendiente
+      let activeQuote = await this.quoteRepository.findOne({
+        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Pendiente', products_requested: 'Esperando detalle de productos...' }
+      });
+
+      if (activeQuote) {
+        activeQuote.products_requested = incomingText;
+        // Aquí puedes realizar un cálculo estimado opcional si lo deseas
+        activeQuote.total_estimated = 0.00; 
+        await this.quoteRepository.save(activeQuote);
+
+        botResponseText = `✅ ¡Cotización registrada con éxito!\n\n📋 *Detalle:* ${incomingText}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Gracias!`;
+        await msg.reply(botResponseText);
+
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: botResponseText,
+          whatsapp_phone: whatsappPhone,
+        });
+        return;
+      }
+
+      // 4. COMANDO INTELIGENTE DE AYUDA / MENÚ AUTOMÁTICO
       const lowerText = incomingText.toLowerCase();
       const helpTriggers = ['ayuda', 'menu', 'menú', 'comandos', 'help'];
       
@@ -200,12 +247,12 @@ export class WhatsappService {
           where: { whatsapp_phone: whatsappPhone, is_active: true }
         });
 
-        let menuText = ` *${settings?.bot_name || 'Asistente Virtual'}* - Menú de Ayuda:\n\nPuedes escribir los siguientes accesos directos:\n`;
+        let menuText = `*${settings?.bot_name || 'Asistente Virtual'}* - Menú de Ayuda:\n\nPuedes escribir los siguientes accesos directos:\n`;
         menuText += `• *Productos* - Ver nuestro catálogo\n`;
         menuText += `• *Asesor* - Hablar con un representante humano\n`;
 
         if (activeKeywords.length > 0) {
-          menuText += ` Palabras clave disponibles:`;
+          menuText += `\nPalabras clave disponibles:\n`;
           activeKeywords.forEach(rule => {
             menuText += `• *${rule.keyword}*\n`;
           });
@@ -221,7 +268,8 @@ export class WhatsappService {
         });
         return;
       }
-// 5. Flujo normal de palabras clave guardadas en la base de datos (Catálogos, Textos, etc.)
+
+      // 5. Flujo normal de palabras clave guardadas en la base de datos
       const keywords = await this.keywordRepository.find({ 
         where: { whatsapp_phone: whatsappPhone, is_active: true } 
       });
@@ -244,14 +292,27 @@ export class WhatsappService {
         if (matchedRule.response_type === 'text') {
           botResponseText = matchedRule.reply_text;
           await msg.reply(botResponseText);
+        } else if (matchedRule.response_type === 'quote') {
+          // FLUJO DE COTIZACIÓN INTERACTIVO: Preguntamos el nombre primero
+          botResponseText = `¡Con mucho gusto te ayudamos con tu cotización! 📝\n\nPara empezar, por favor dinos: *¿Cuál es tu nombre?*`;
+          await msg.reply(botResponseText);
+
+          // Creamos el registro temporal esperando el nombre del cliente
+          await this.quoteRepository.save({
+            whatsapp_phone: whatsappPhone,
+            client_phone: senderNumber,
+            client_name: '',
+            products_requested: 'Esperando detalle de productos...',
+            total_estimated: 0.00,
+            status: 'Esperando Nombre'
+          });
+
         } else if (matchedRule.response_type === 'product_search') {
-          // Buscamos si el usuario escribió exactamente el nombre de un producto para ver su detalle completo
           const specificProduct = await this.productRepository.findOne({
             where: { whatsapp_phone: whatsappPhone, status: true, name: incomingText }
           });
 
           if (specificProduct) {
-            // Si escribió el nombre exacto de un producto, le damos la ficha completa con imagen
             const details = `*${specificProduct.name}*` +
               (specificProduct.brand ? `\nMarca: ${specificProduct.brand}` : '') +
               `\nPrecio: $${specificProduct.price}` +
@@ -271,7 +332,6 @@ export class WhatsappService {
             }
             botResponseText = `Se enviaron los detalles del producto: ${specificProduct.name}`;
           } else {
-            // Si solo escribió la palabra clave (ej. "Productos"), mostramos un listado ligero y resumido de los productos disponibles
             const products = await this.productRepository.find({ 
               where: { whatsapp_phone: whatsappPhone, status: true },
               take: 10 
@@ -293,7 +353,6 @@ export class WhatsappService {
           }
         }
       } else {
-        // Validación extra: Si el usuario escribió directamente el nombre de un producto sin disparar palabra clave
         const directProduct = await this.productRepository.findOne({
           where: { whatsapp_phone: whatsappPhone, status: true, name: incomingText }
         });

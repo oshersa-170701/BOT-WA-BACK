@@ -7,6 +7,7 @@ import { BotSettingsModule } from './bot_settings/bot_settings.module';
 import { ChatLogsModule } from './chat_logs/chat_logs.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { QuotesModule } from './quotes/quotes.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     ChatLogsModule,
     UsersModule,
     WhatsappModule,
+    QuotesModule,
   ],
 })
 export class AppModule {}
