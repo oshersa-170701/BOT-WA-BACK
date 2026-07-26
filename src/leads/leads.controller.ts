@@ -6,12 +6,12 @@ export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
   @Get('user/:whatsappPhone')
-  findAllByPhone(@Param('whatsappPhone') whatsappPhone: string) {
-    return this.leadsService.findAllByPhone(whatsappPhone);
+  async findAllByPhone(@Param('whatsappPhone') whatsappPhone: string) {
+    return await this.leadsService.findAllByPhone(whatsappPhone);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.leadsService.remove(+id);
+  async remove(@Param('id') id: string) {
+    return await this.leadsService.remove(+id);
   }
 }

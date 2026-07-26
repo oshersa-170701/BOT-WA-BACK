@@ -8,6 +8,7 @@ import { ChatLogsModule } from './chat_logs/chat_logs.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { QuotesModule } from './quotes/quotes.module';
+import { LeadsModule } from './leads/leads.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { QuotesModule } from './quotes/quotes.module';
     UsersModule,
     WhatsappModule,
     QuotesModule,
+    LeadsModule,
   ],
 })
 export class AppModule {}
