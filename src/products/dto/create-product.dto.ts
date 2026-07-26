@@ -46,4 +46,7 @@ export class CreateProductDto {
   @IsString()
   @IsNotEmpty()
   whatsapp_phone: string; // Relacionado al número de celular del usuario
+  @IsString()
+  @IsOptional()
+  category?: string; // Nueva columna para la categoría del producto
 }

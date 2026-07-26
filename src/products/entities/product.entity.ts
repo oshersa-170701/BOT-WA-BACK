@@ -31,12 +31,12 @@ export class Product {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
-
-  
   @Column({ type: 'varchar', length: 150 })
   image_url: string;
   @Column({ type: 'varchar', length: 150 })
   description: string;
   @Column({ type: 'varchar', length: 20 })
   whatsapp_phone: string; // Relacionado al número de celular del usuario
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  category: string; // Nueva columna para la categoría del producto
 }

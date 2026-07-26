@@ -191,28 +191,37 @@ export class WhatsappService {
       }
 
       // 4. Detectar palabras clave especiales de asociados / representantes / socios / asesor
+      // 4.1 COMANDO INTELIGENTE DE AYUDA / MENÚ AUTOMÁTICO
       const lowerText = incomingText.toLowerCase();
-      const triggerWords = ['asociado', 'representante', 'socio', 'asesor'];
-      const isAssociateTrigger = triggerWords.some(word => lowerText.includes(word));
+      const helpTriggers = ['ayuda', 'menu', 'menú', 'comandos', 'help'];
+      
+      if (helpTriggers.includes(lowerText)) {
+        const activeKeywords = await this.keywordRepository.find({
+          where: { whatsapp_phone: whatsappPhone, is_active: true }
+        });
 
-      if (isAssociateTrigger) {
-        if (!lead) {
-          lead = this.leadRepository.create({
-            client_phone: senderNumber,
-            whatsapp_phone: whatsappPhone,
-            conversation_state: 'collecting_name',
+        let menuText = ` *${settings?.bot_name || 'Asistente Virtual'}* - Menú de Ayuda:\n\nPuedes escribir los siguientes accesos directos:\n`;
+        menuText += `• *Productos* - Ver nuestro catálogo\n`;
+        menuText += `• *Asesor* - Hablar con un representante humano\n`;
+
+        if (activeKeywords.length > 0) {
+          menuText += ` Palabras clave disponibles:`;
+          activeKeywords.forEach(rule => {
+            menuText += `• *${rule.keyword}*\n`;
           });
-        } else {
-          lead.conversation_state = 'collecting_name';
         }
-        await this.leadRepository.save(lead);
 
-        botResponseText = `¡Hola! Con gusto te atendemos. Para canalizarte con un asesor, por favor dinos: ¿Cuál es tu nombre?`;
-        await msg.reply(botResponseText);
+        await msg.reply(menuText);
+        
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: menuText,
+          whatsapp_phone: whatsappPhone,
+        });
         return;
       }
-
-      // 5. Flujo normal de palabras clave guardadas en la base de datos (Catálogos, Textos, etc.)
+// 5. Flujo normal de palabras clave guardadas en la base de datos (Catálogos, Textos, etc.)
       const keywords = await this.keywordRepository.find({ 
         where: { whatsapp_phone: whatsappPhone, is_active: true } 
       });
@@ -236,43 +245,81 @@ export class WhatsappService {
           botResponseText = matchedRule.reply_text;
           await msg.reply(botResponseText);
         } else if (matchedRule.response_type === 'product_search') {
-          const products = await this.productRepository.find({ 
-            where: { whatsapp_phone: whatsappPhone, status: true },
-            take: 3 
+          // Buscamos si el usuario escribió exactamente el nombre de un producto para ver su detalle completo
+          const specificProduct = await this.productRepository.findOne({
+            where: { whatsapp_phone: whatsappPhone, status: true, name: incomingText }
           });
 
-          if (products.length === 0) {
-            botResponseText = 'Lo siento, por el momento no tenemos productos registrados en el catálogo.';
-            await msg.reply(botResponseText);
-          } else {
-            botResponseText = 'Aquí tienes los productos disponibles en nuestro catálogo:';
-            await msg.reply(botResponseText);
+          if (specificProduct) {
+            // Si escribió el nombre exacto de un producto, le damos la ficha completa con imagen
+            const details = `*${specificProduct.name}*` +
+              (specificProduct.brand ? `\nMarca: ${specificProduct.brand}` : '') +
+              `\nPrecio: $${specificProduct.price}` +
+              `\nStock: ${specificProduct.stock} ${specificProduct.unit || 'pza'}` +
+              (specificProduct.description ? `\n${specificProduct.description}` : '');
 
-            for (const prod of products) {
-              const details = `*${prod.name}*` +
-                (prod.brand ? `\nMarca: ${prod.brand}` : '') +
-                `\nPrecio: $${prod.price}` +
-                `\nStock: ${prod.stock} ${prod.unit || 'pza'}` +
-                (prod.description ? `\n${prod.description}` : '');
-
-              if (prod.image_url) {
-                try {
-                  const media = await MessageMedia.fromUrl(prod.image_url, { unsafeMime: true });
-                  await client.sendMessage(senderNumber, media, { caption: details });
-                } catch (imgErr) {
-                  console.error('Error al enviar imagen:', imgErr);
-                  await msg.reply(details);
-                }
-              } else {
+            if (specificProduct.image_url) {
+              try {
+                const media = await MessageMedia.fromUrl(specificProduct.image_url, { unsafeMime: true });
+                await client.sendMessage(senderNumber, media, { caption: details });
+              } catch (imgErr) {
+                console.error('Error al enviar imagen:', imgErr);
                 await msg.reply(details);
               }
+            } else {
+              await msg.reply(details);
             }
-            botResponseText = `Se enviaron ${products.length} productos del catálogo al usuario.`;
+            botResponseText = `Se enviaron los detalles del producto: ${specificProduct.name}`;
+          } else {
+            // Si solo escribió la palabra clave (ej. "Productos"), mostramos un listado ligero y resumido de los productos disponibles
+            const products = await this.productRepository.find({ 
+              where: { whatsapp_phone: whatsappPhone, status: true },
+              take: 10 
+            });
+
+            if (products.length === 0) {
+              botResponseText = 'Lo siento, por el momento no tenemos productos registrados en el catálogo.';
+              await msg.reply(botResponseText);
+            } else {
+              let listText = '📋 *Catálogo de Productos Disponibles*\nEscribe el *nombre exacto* de cualquiera de los siguientes productos para ver su foto y detalles:\n';
+              
+              products.forEach((prod, index) => {
+                listText += `\n${index + 1}. *${prod.name}* - $${prod.price} (${prod.unit || 'pza'})`;
+              });
+
+              botResponseText = listText;
+              await msg.reply(botResponseText);
+            }
           }
         }
       } else {
-        botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje.';
-        await msg.reply(botResponseText);
+        // Validación extra: Si el usuario escribió directamente el nombre de un producto sin disparar palabra clave
+        const directProduct = await this.productRepository.findOne({
+          where: { whatsapp_phone: whatsappPhone, status: true, name: incomingText }
+        });
+
+        if (directProduct) {
+          const details = `*${directProduct.name}*` +
+            (directProduct.brand ? `\nMarca: ${directProduct.brand}` : '') +
+            `\nPrecio: $${directProduct.price}` +
+            `\nStock: ${directProduct.stock} ${directProduct.unit || 'pza'}` +
+            (directProduct.description ? `\n${directProduct.description}` : '');
+
+          if (directProduct.image_url) {
+            try {
+              const media = await MessageMedia.fromUrl(directProduct.image_url, { unsafeMime: true });
+              await client.sendMessage(senderNumber, media, { caption: details });
+            } catch (imgErr) {
+              await msg.reply(details);
+            }
+          } else {
+            await msg.reply(details);
+          }
+          botResponseText = `Se envió el detalle directo del producto: ${directProduct.name}`;
+        } else {
+          botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje.';
+          await msg.reply(botResponseText);
+        }
       }
 
       await this.chatLogRepository.save({

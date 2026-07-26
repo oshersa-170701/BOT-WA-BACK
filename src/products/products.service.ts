@@ -44,4 +44,20 @@ export class ProductsService {
     const product = await this.findOne(id);
     return await this.productRepository.remove(product);
   }
+  async createOrUpdateFromExcel(productData: any) {
+    // Si tiene SKU, validamos si ya existe para actualizarlo o crearlo
+    if (productData.sku) {
+      const existing = await this.productRepository.findOne({
+        where: { sku: productData.sku, whatsapp_phone: productData.whatsapp_phone }
+      });
+      if (existing) {
+        await this.productRepository.update(existing.id, productData);
+        return;
+      }
+    }
+
+    // Si no tiene SKU o no existe, lo creamos nuevo
+    const newProd = this.productRepository.create(productData);
+    await this.productRepository.save(newProd);
+  }
 }
