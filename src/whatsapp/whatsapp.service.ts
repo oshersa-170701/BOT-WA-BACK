@@ -29,7 +29,7 @@ export class WhatsappService {
     @InjectRepository(ChatLog)
     private chatLogRepository: Repository<ChatLog>,
     @InjectRepository(Lead)
-    private leadRepository: Repository<Lead>, // <-- Inyectamos el repositorio
+    private leadRepository: Repository<Lead>,
   ) {}
 
   async initWhatsAppClient(whatsappPhone: string) {
@@ -140,6 +140,24 @@ export class WhatsappService {
 
       let botResponseText = '';
 
+      // 0. VERIFICAR SI ES EL PRIMER MENSAJE DE ESTE NÚMERO (BIENESTAR / BIENVENIDA AUTOMÁTICA)
+      const previousChatsCount = await this.chatLogRepository.count({
+        where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
+      });
+
+      if (previousChatsCount === 0) {
+        botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.';
+        await msg.reply(botResponseText);
+
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: botResponseText,
+          whatsapp_phone: whatsappPhone,
+        });
+        return; // Terminamos aquí para saludar corporativamente sin disparar otras reglas de golpe
+      }
+
       // 1. Verificamos si este chat ya fue liberado para un asesor humano (assigned_to_human)
       let lead = await this.leadRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
@@ -178,7 +196,6 @@ export class WhatsappService {
       const isAssociateTrigger = triggerWords.some(word => lowerText.includes(word));
 
       if (isAssociateTrigger) {
-        // Registramos o reiniciamos el lead en estado de pedir nombre
         if (!lead) {
           lead = this.leadRepository.create({
             client_phone: senderNumber,
