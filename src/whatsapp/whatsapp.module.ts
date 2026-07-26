@@ -6,10 +6,11 @@ import { BotKeyword } from '../bot_keywords/entities/bot_keyword.entity';
 import { BotSetting } from '../bot_settings/entities/bot_setting.entity';
 import { ChatLog } from '../chat_logs/entities/chat_log.entity';
 import { WhatsappController } from './whatsapp.controller';
+import { Lead } from 'src/leads/lead.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Product, BotKeyword, BotSetting, ChatLog]),
+    TypeOrmModule.forFeature([Product, BotKeyword, BotSetting, ChatLog, Lead]),
   ],
   controllers: [WhatsappController],
   providers: [WhatsappService],

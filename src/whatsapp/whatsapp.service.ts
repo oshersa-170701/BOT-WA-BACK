@@ -10,10 +10,10 @@ import { Product } from '../products/entities/product.entity';
 import { BotKeyword } from '../bot_keywords/entities/bot_keyword.entity';
 import { BotSetting } from '../bot_settings/entities/bot_setting.entity';
 import { ChatLog } from '../chat_logs/entities/chat_log.entity';
+import { Lead } from 'src/leads/lead.entity';
 
 @Injectable()
 export class WhatsappService {
-  // Mapas basados en el número de teléfono (whatsapp_phone) en lugar del ID numérico
   private clients: Map<string, Client> = new Map();
   private latestQrs: Map<string, string> = new Map();
   private initializing: Set<string> = new Set();
@@ -28,6 +28,8 @@ export class WhatsappService {
     private settingRepository: Repository<BotSetting>,
     @InjectRepository(ChatLog)
     private chatLogRepository: Repository<ChatLog>,
+    @InjectRepository(Lead)
+    private leadRepository: Repository<Lead>, // <-- Inyectamos el repositorio
   ) {}
 
   async initWhatsAppClient(whatsappPhone: string) {
@@ -39,7 +41,7 @@ export class WhatsappService {
     try {
       const client = new Client({
         authStrategy: new LocalAuth({
-          clientId: `phone-${whatsappPhone}`, // Carpeta de sesión independiente por número de teléfono
+          clientId: `phone-${whatsappPhone}`,
         }),
         puppeteer: {
           headless: true,
@@ -59,7 +61,6 @@ export class WhatsappService {
         try {
           const qrDataUrl = await qrcode.toDataURL(qrText);
           this.latestQrs.set(whatsappPhone, qrDataUrl);
-          console.log(`[Teléfono ${whatsappPhone}] Nuevo código QR de WhatsApp generado`);
         } catch (err) {
           console.error(`[Teléfono ${whatsappPhone}] Error al convertir QR:`, err);
         }
@@ -105,34 +106,30 @@ export class WhatsappService {
     }
   }
 
-private async handleIncomingMessage(whatsappPhone: string, msg: Message, client: Client) {
+  private async handleIncomingMessage(whatsappPhone: string, msg: Message, client: Client) {
     try {
       const settings = await this.settingRepository.findOne({ 
         where: { whatsapp_phone: whatsappPhone } 
       });
 
-      // Si el bot está apagado globalmente, ignoramos el mensaje
       if (settings && settings.is_bot_active === false) {
         return;
       }
 
-      // Validar horario y días si están configurados
       if (settings) {
         const now = new Date();
         const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         
-        // Validar hora de inicio y cierre
         if (settings.start_time && settings.end_time) {
           if (currentTime < settings.start_time || currentTime > settings.end_time) {
-            return; // Fuera de horario
+            return;
           }
         }
 
-        // Validar días de la semana permitidos (0 = Domingo, 1 = Lunes, ..., 6 = Sábado)
         if (settings.allowed_days && Array.isArray(settings.allowed_days) && settings.allowed_days.length > 0) {
           const currentDay = now.getDay();
           if (!settings.allowed_days.includes(currentDay)) {
-            return; // Hoy no labora el bot
+            return;
           }
         }
       }
@@ -143,6 +140,62 @@ private async handleIncomingMessage(whatsappPhone: string, msg: Message, client:
 
       let botResponseText = '';
 
+      // 1. Verificamos si este chat ya fue liberado para un asesor humano (assigned_to_human)
+      let lead = await this.leadRepository.findOne({
+        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
+      });
+
+      if (lead && lead.conversation_state === 'assigned_to_human') {
+        // El bot ya cumplió su ciclo y está en manos del asesor, no interviene más
+        return;
+      }
+
+      // 2. Si está en proceso de recopilar el Nombre
+      if (lead && lead.conversation_state === 'collecting_name') {
+        lead.client_name = incomingText;
+        lead.conversation_state = 'collecting_company';
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¡Mucho gusto, ${incomingText}! ¿A qué compañía o empresa pertenece?`;
+        await msg.reply(botResponseText);
+        return;
+      }
+
+      // 3. Si está en proceso de recopilar la Empresa / Compañía
+      if (lead && lead.conversation_state === 'collecting_company') {
+        lead.company_name = incomingText;
+        lead.conversation_state = 'assigned_to_human'; // <-- Liberamos el chat por completo para el asesor
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¡Gracias por la información! En unos momentos un asesor se comunicará contigo.`;
+        await msg.reply(botResponseText);
+        return;
+      }
+
+      // 4. Detectar palabras clave especiales de asociados / representantes / socios / asesor
+      const lowerText = incomingText.toLowerCase();
+      const triggerWords = ['asociado', 'representante', 'socio', 'asesor'];
+      const isAssociateTrigger = triggerWords.some(word => lowerText.includes(word));
+
+      if (isAssociateTrigger) {
+        // Registramos o reiniciamos el lead en estado de pedir nombre
+        if (!lead) {
+          lead = this.leadRepository.create({
+            client_phone: senderNumber,
+            whatsapp_phone: whatsappPhone,
+            conversation_state: 'collecting_name',
+          });
+        } else {
+          lead.conversation_state = 'collecting_name';
+        }
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¡Hola! Con gusto te atendemos. Para canalizarte con un asesor, por favor dinos: ¿Cuál es tu nombre?`;
+        await msg.reply(botResponseText);
+        return;
+      }
+
+      // 5. Flujo normal de palabras clave guardadas en la base de datos (Catálogos, Textos, etc.)
       const keywords = await this.keywordRepository.find({ 
         where: { whatsapp_phone: whatsappPhone, is_active: true } 
       });
@@ -216,6 +269,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: Message, client:
       console.error('Error procesando mensaje:', error);
     }
   }
+
   async getQrCode(whatsappPhone: string) {
     const client = this.clients.get(whatsappPhone);
     if (!client && !this.initializing.has(whatsappPhone)) {
