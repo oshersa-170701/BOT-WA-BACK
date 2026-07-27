@@ -9,6 +9,7 @@ import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { LeadsModule } from './leads/leads.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
   imports: [
