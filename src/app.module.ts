@@ -12,6 +12,10 @@ import { LeadsModule } from './leads/leads.module';
 
 @Module({
   imports: [
+    ThrottlerModule.forRoot([{
+      ttl: 60000, // Tiempo en milisegundos (60 segundos)
+      limit: 20,  // Máximo 20 peticiones por IP en ese minuto
+    }]),
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'mysql',
