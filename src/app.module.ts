@@ -18,15 +18,16 @@ import { ThrottlerModule } from '@nestjs/throttler';
       limit: 20,  // Máximo 20 peticiones por IP en ese minuto
     }]),
     ConfigModule.forRoot({ isGlobal: true }),
-    TypeOrmModule.forRoot({
+   TypeOrmModule.forRoot({
       type: 'mysql',
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '3306', 10),
-      username: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
+      // Si existe MYSQLHOST (Railway), la usa; si no, usa DB_HOST o 'localhost'
+      host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306', 10),
+      username: process.env.MYSQLUSER || process.env.DB_USER,
+      password: process.env.MYSQLPASSWORD || process.env.DB_PASSWORD,
+      database: process.env.MYSQL_DATABASE || process.env.DB_NAME,
       autoLoadEntities: true,
-      synchronize: false,
+      synchronize: true, // Esto creará tus tablas automáticamente en Railway
     }),
     ProductsModule,
     BotKeywordsModule,

@@ -456,34 +456,4 @@ async getQrCode(whatsappPhone: string) {
       return { success: true, message: 'Sesión restablecida con éxito' };
     }
   }
-  async disconnectWhatsApp(whatsappPhone: string) {
-    try {
-      this.latestQrs.delete(whatsappPhone);
-      const client = this.clients.get(whatsappPhone);
-
-      if (client) {
-        try { await client.logout(); } catch (e) {}
-        try { await client.destroy(); } catch (e) {}
-        this.clients.delete(whatsappPhone);
-      }
-
-      this.initializing.delete(whatsappPhone);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      const authPath = path.resolve(process.cwd(), `.wwebjs_auth/session-phone-${whatsappPhone}`);
-      try {
-        if (fs.existsSync(authPath)) {
-          fs.rmSync(authPath, { recursive: true, force: true });
-        }
-      } catch (fsErr) {
-        console.log('Nota: Carpeta de sesión liberándose gradualmente.');
-      }
-
-      return { success: true, message: 'Sesión cerrada correctamente' };
-    } catch (error) {
-      console.error('Error en disconnectWhatsApp:', error);
-      this.initializing.delete(whatsappPhone);
-      return { success: false, message: 'Error al cerrar la sesión de WhatsApp' };
-    }
-  }
 }
