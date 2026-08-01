@@ -7,7 +7,7 @@ async function bootstrap() {
   // Cambiamos a NestExpressApplication para poder usar métodos de Express
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // Activar Helmet de inmediato
-  app.use(helmet());
+  // app.use(helmet());
   // 1. Habilitar CORS
   app.enableCors();
 
