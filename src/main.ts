@@ -6,12 +6,11 @@ import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  
   // Activar Helmet de manera segura (puedes ajustarlo si bloquea scripts)
   app.use(helmet({ contentSecurityPolicy: false }));
 
   // 1. Habilitar CORS
-  app.enableCors();
+  app.enableCors({ origin: true });
 
   // 2. Servir la carpeta 'www' del frontend de manera estática
   app.useStaticAssets(join(__dirname, '..', 'www'));

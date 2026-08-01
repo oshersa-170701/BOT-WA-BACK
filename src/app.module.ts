@@ -10,15 +10,23 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { LeadsModule } from './leads/leads.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot([{
-      ttl: 60000, // Tiempo en milisegundos (60 segundos)
-      limit: 20,  // Máximo 20 peticiones por IP en ese minuto
-    }]),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'www'),
+      exclude: ['/api*'], // O ajusta si tus rutas empiezan directo con /users, pon ['/users*', '/auth*'] para proteger la API
+    }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000, // Tiempo en milisegundos (60 segundos)
+        limit: 20, // Máximo 20 peticiones por IP en ese minuto
+      },
+    ]),
     ConfigModule.forRoot({ isGlobal: true }),
-   TypeOrmModule.forRoot({
+    TypeOrmModule.forRoot({
       type: 'mysql',
       // Si existe MYSQLHOST (Railway), la usa; si no, usa DB_HOST o 'localhost'
       host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
