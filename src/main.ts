@@ -15,13 +15,23 @@ async function bootstrap() {
   // 2. Servir la carpeta 'www' del frontend de manera estática
   app.useStaticAssets(join(__dirname, '..', 'www'));
 
-  // 3. EL TRUCO PARA LA SPA: Redirigir cualquier ruta que no sea API al index.html de Ionic
+  // 3. MIDDLEWARE LIMPIO PARA LA SPA DE IONIC
   app.use((req, res, next) => {
-    // Si la petición es para la API (ej. /users, /auth, etc.), déjala pasar al backend
-    if (req.path.startsWith('/api') || req.path.includes('.')) {
+    // Si la ruta pertenece a los endpoints de la API o es un archivo físico con extensión (js, css, png...), déjalo pasar
+    if (
+      req.path.startsWith('/users') || 
+      req.path.startsWith('/products') || 
+      req.path.startsWith('/bot_keywords') || 
+      req.path.startsWith('/bot_settings') || 
+      req.path.startsWith('/chat_logs') || 
+      req.path.startsWith('/quotes') || 
+      req.path.startsWith('/leads') || 
+      req.path.startsWith('/whatsapp') || 
+      req.path.includes('.')
+    ) {
       return next();
     }
-    // De lo contrario, entrega el index.html para que Angular controle las rutas
+    // De lo contrario, entrega el index.html para que el enrutador de Angular maneje las vistas
     res.sendFile(join(__dirname, '..', 'www', 'index.html'));
   });
 
