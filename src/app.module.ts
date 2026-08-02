@@ -17,7 +17,7 @@ import { join } from 'path';
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'www'),
-      exclude: ['/api*'], // O ajusta si tus rutas empiezan directo con /users, pon ['/users*', '/auth*'] para proteger la API
+      exclude: ['/users*'], // <--- AQUÍ ESTÁ LA CLAVE PARA QUE NO BLOQUEE EL LOGIN
     }),
     ThrottlerModule.forRoot([
       {
