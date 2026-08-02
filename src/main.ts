@@ -10,7 +10,11 @@ async function bootstrap() {
   app.useStaticAssets(join(__dirname, '..', 'www'));
 
   app.use((req, res, next) => {
-    if (req.path.startsWith('/users') || req.path.includes('.')) {
+    if (
+      req.path.startsWith('/users') || 
+      req.path.startsWith('/login') || // <--- EXCLUIMOS EXPLÍCITAMENTE /LOGIN AQUÍ
+      req.path.includes('.')
+    ) {
       return next();
     }
     res.sendFile(join(__dirname, '..', 'www', 'index.html'));
