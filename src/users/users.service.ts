@@ -45,11 +45,11 @@ export class UsersService {
     const user = await this.findOne(id);
     return await this.userRepository.remove(user);
   }
-  async login(email: string, pass: string) {
-  const user = await this.userRepository.findOneBy({ email });
-  if (!user || user.password !== pass) {
-    throw new NotFoundException('Credenciales inválidas');
+  async login(email: string, password: string) {
+    const user = await this.userRepository.findOneBy({ email });
+    if (!user || user.password !== password) {
+      throw new NotFoundException('Credenciales inválidas');
+    }
+    return { success: true, message: 'Login exitoso', user };
   }
-  return { success: true, message: 'Login exitoso', user };
-}
 }
