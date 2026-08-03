@@ -12,23 +12,34 @@ import { LeadsModule } from './leads/leads.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'www'),
-      exclude: ['/users*'], // <--- AQUÍ ESTÁ LA CLAVE PARA QUE NO BLOQUEE EL LOGIN
+      // Excluimos las rutas de la API para que no sean interceptadas por los archivos estáticos
+      exclude: [
+        '/users*',
+        '/products*',
+        '/bot-keywords*',
+        '/bot-settings*',
+        '/chat-logs*',
+        '/whatsapp*',
+        '/quotes*',
+        '/leads*',
+      ],
     }),
     ThrottlerModule.forRoot([
       {
-        ttl: 60000, // Tiempo en milisegundos (60 segundos)
-        limit: 20, // Máximo 20 peticiones por IP en ese minuto
+        ttl: 60000,
+        limit: 20,
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'mysql',
-      // Si existe MYSQLHOST (Railway), la usa; si no, usa DB_HOST o 'localhost'
       host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
       port: parseInt(
         process.env.MYSQLPORT || process.env.DB_PORT || '3306',
@@ -41,7 +52,7 @@ import { join } from 'path';
         process.env.MYSQLDATABASE ||
         process.env.DB_NAME,
       autoLoadEntities: true,
-      synchronize: true, // Esto creará tus tablas automáticamente en Railway
+      synchronize: true,
     }),
     ProductsModule,
     BotKeywordsModule,
@@ -52,5 +63,7 @@ import { join } from 'path';
     QuotesModule,
     LeadsModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
