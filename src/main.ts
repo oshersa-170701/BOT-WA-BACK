@@ -1,16 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create(AppModule);
 
-  app.enableCors({ origin: true });
+  // ESTO ES LO QUE PERMITE QUE NETIFY / RAILWAY FRONT HABLE CON EL BACKEND
+  app.enableCors({
+    origin: '*', // O puedes poner la URL específica de tu frontend en Railway/Netlify
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
 
-  // Sirve los archivos estáticos de Ionic directamente
-  app.useStaticAssets(join(__dirname, '..', 'www'));
-
-  await app.listen(process.env.PORT || 3000);
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
 }
 bootstrap();
