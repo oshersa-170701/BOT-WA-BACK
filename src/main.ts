@@ -18,7 +18,16 @@ async function bootstrap() {
 
   // 3. Ruta comodín para que Angular/Ionic maneje las rutas del cliente sin error 404
   app.use((req, res, next) => {
-    if (req.path.startsWith('/users') || req.path.startsWith('/products') || req.path.startsWith('/bot_keywords') || req.path.startsWith('/bot_settings') || req.path.startsWith('/chat_logs') || req.path.startsWith('/whatsapp') || req.path.startsWith('/quotes') || req.path.startsWith('/leads')) {
+    if (
+      req.path.startsWith('/users') ||
+      req.path.startsWith('/products') ||
+      req.path.startsWith('/bot_keywords') ||
+      req.path.startsWith('/bot_settings') ||
+      req.path.startsWith('/chat_logs') ||
+      req.path.startsWith('/whatsapp') ||
+      req.path.startsWith('/quotes') ||
+      req.path.startsWith('/leads')
+    ) {
       return next();
     }
     res.sendFile(join(__dirname, '..', 'www', 'index.html'));
