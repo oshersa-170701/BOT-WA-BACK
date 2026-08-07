@@ -42,14 +42,12 @@ export class WhatsappService {
     this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
 
     try {
-      const client = new Client({
+     const client = new Client({
         authStrategy: new LocalAuth({
           clientId: `phone-${whatsappPhone}`,
         }),
         puppeteer: {
           headless: true,
-          // Forzamos a usar el chromium del sistema de Linux si existe, evitando el error 127 de bibliotecas
-          executablePath: process.env.CHROME_PATH || '/usr/bin/chromium-browser', 
           args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
