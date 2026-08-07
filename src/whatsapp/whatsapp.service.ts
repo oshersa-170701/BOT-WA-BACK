@@ -48,6 +48,8 @@ export class WhatsappService {
         }),
         puppeteer: {
           headless: true,
+          // Forzamos a usar el chromium del sistema de Linux si existe, evitando el error 127 de bibliotecas
+          executablePath: process.env.CHROME_PATH || '/usr/bin/chromium-browser', 
           args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
@@ -55,7 +57,8 @@ export class WhatsappService {
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-software-rasterizer'
           ],
         },
       });
