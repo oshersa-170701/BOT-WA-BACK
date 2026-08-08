@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like } from 'typeorm';
-import { Client, LocalAuth, Message, MessageMedia } from 'whatsapp-web.js';
+import { Repository } from 'typeorm';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, makeInMemoryStore } from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode';
 import * as fs from 'fs';
 import * as path from 'path';
+import pino from 'pino';
 
 import { Product } from '../products/entities/product.entity';
 import { BotKeyword } from '../bot_keywords/entities/bot_keyword.entity';
@@ -15,7 +16,7 @@ import { Quote } from 'src/quotes/entities/quote.entity';
 
 @Injectable()
 export class WhatsappService {
-  private clients: Map<string, Client> = new Map();
+  private sessions: Map<string, any> = new Map();
   private latestQrs: Map<string, string> = new Map();
   private initializing: Set<string> = new Set();
   private botStartTimes: Map<string, number> = new Map();
@@ -33,84 +34,85 @@ export class WhatsappService {
     private leadRepository: Repository<Lead>,
     @InjectRepository(Quote)
     private quoteRepository: Repository<Quote>,
-  ) { }
+  ) {}
 
   async initWhatsAppClient(whatsappPhone: string) {
-    if (this.initializing.has(whatsappPhone) || this.clients.has(whatsappPhone)) return;
+    if (this.initializing.has(whatsappPhone) || this.sessions.has(whatsappPhone)) return;
     this.initializing.add(whatsappPhone);
     this.latestQrs.delete(whatsappPhone);
     this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
 
     try {
-     const client = new Client({
-        authStrategy: new LocalAuth({
-          clientId: `phone-${whatsappPhone}`,
-        }),
-   puppeteer: {
-          headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu',
-          ],
-        },
+      const authFolder = path.resolve(process.cwd(), `baileys_auth/session-${whatsappPhone}`);
+      const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+
+      const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }) as any,
       });
 
-      client.on('qr', async (qrText) => {
-        try {
-          const qrDataUrl = await qrcode.toDataURL(qrText);
-          this.latestQrs.set(whatsappPhone, qrDataUrl);
-        } catch (err) {
-          console.error(`[Teléfono ${whatsappPhone}] Error al convertir QR:`, err);
+      sock.ev.on('connection.update', async (update) => {
+        const { connection, qr, lastDisconnect } = update;
+
+        if (qr) {
+          try {
+            const qrDataUrl = await qrcode.toDataURL(qr);
+            this.latestQrs.set(whatsappPhone, qrDataUrl);
+          } catch (err) {
+            console.error(`[Teléfono ${whatsappPhone}] Error al convertir QR:`, err);
+          }
+        }
+
+        if (connection === 'open') {
+          console.log(`[Teléfono ${whatsappPhone}] ¡WhatsApp conectado y listo con Baileys!`);
+          this.latestQrs.delete(whatsappPhone);
+          this.initializing.delete(whatsappPhone);
+          this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
+        }
+
+        if (connection === 'close') {
+          const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+          console.log(`[Teléfono ${whatsappPhone}] WhatsApp desconectado. Reconectando:`, shouldReconnect);
+          this.sessions.delete(whatsappPhone);
+          this.latestQrs.delete(whatsappPhone);
+          this.initializing.delete(whatsappPhone);
+          if (shouldReconnect) {
+            this.initWhatsAppClient(whatsappPhone);
+          }
         }
       });
 
-      client.on('ready', () => {
-        console.log(`[Teléfono ${whatsappPhone}] ¡WhatsApp conectado y listo!`);
-        this.latestQrs.delete(whatsappPhone);
-        this.initializing.delete(whatsappPhone);
-        this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
-      });
+      sock.ev.on('creds.update', saveCreds);
 
-      client.on('authenticated', () => {
-        console.log(`[Teléfono ${whatsappPhone}] WhatsApp autenticado correctamente`);
-      });
+      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
 
-      client.on('message', async (msg: Message) => {
-        if (msg.fromMe || msg.isStatus) return;
+        const senderNumber = msg.key.remoteJid;
+        if (!senderNumber || senderNumber.includes('@g.us')) return; // Ignorar grupos
+
+        const messageTimestamp = typeof msg.messageTimestamp === 'number' 
+          ? msg.messageTimestamp 
+          : Number(msg.messageTimestamp || 0);
+
         const startTime = this.botStartTimes.get(whatsappPhone) || 0;
-        if (msg.timestamp && msg.timestamp < startTime) return;
-        await this.handleIncomingMessage(whatsappPhone, msg, client);
+        if (messageTimestamp && messageTimestamp < startTime) return;
+
+        await this.handleIncomingMessage(whatsappPhone, msg, sock);
       });
 
-      client.on('auth_failure', (msg) => {
-        console.error(`[Teléfono ${whatsappPhone}] Error de autenticación:`, msg);
-        this.latestQrs.delete(whatsappPhone);
-        this.initializing.delete(whatsappPhone);
-      });
-
-      client.on('disconnected', (reason) => {
-        console.log(`[Teléfono ${whatsappPhone}] WhatsApp desconectado:`, reason);
-        this.clients.delete(whatsappPhone);
-        this.latestQrs.delete(whatsappPhone);
-        this.initializing.delete(whatsappPhone);
-      });
-
-      this.clients.set(whatsappPhone, client);
-      await client.initialize();
+      this.sessions.set(whatsappPhone, sock);
+      this.initializing.delete(whatsappPhone);
     } catch (error) {
-      console.error(`[Teléfono ${whatsappPhone}] Error al iniciar el cliente:`, error);
-      this.clients.delete(whatsappPhone);
+      console.error(`[Teléfono ${whatsappPhone}] Error al iniciar cliente Baileys:`, error);
+      this.sessions.delete(whatsappPhone);
       this.initializing.delete(whatsappPhone);
     }
   }
 
-  private async handleIncomingMessage(whatsappPhone: string, msg: Message, client: Client) {
+  private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
@@ -138,8 +140,9 @@ export class WhatsappService {
         }
       }
 
-      const senderNumber = msg.from;
-      const incomingText = msg.body ? msg.body.trim() : '';
+      const senderNumber = msg.key.remoteJid;
+      const messageContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+      const incomingText = messageContent.trim();
       if (!incomingText) return;
 
       let botResponseText = '';
@@ -155,7 +158,7 @@ export class WhatsappService {
 
       if (previousChatsCount === 0) {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
 
         await this.chatLogRepository.save({
           phone_number: senderNumber,
@@ -166,7 +169,7 @@ export class WhatsappService {
         return;
       }
 
-      // 1. Verificamos si este chat ya fue liberado para un asesor humano (assigned_to_human)
+      // 1. Verificamos si este chat ya fue liberado para un asesor humano
       let lead = await this.leadRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
       });
@@ -182,33 +185,33 @@ export class WhatsappService {
         await this.leadRepository.save(lead);
 
         botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 2.5. LEAD: Recopilar Teléfono personalizado
+      // 2.5. LEAD: Recopilar Teléfono
       if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText; // Guardamos el teléfono ingresado por el usuario
+        lead.client_phone = incomingText;
         lead.conversation_state = 'collecting_company';
         await this.leadRepository.save(lead);
 
         botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 3. LEAD: Recopilar Empresa / Compañía
+      // 3. LEAD: Recopilar Empresa
       if (lead && lead.conversation_state === 'collecting_company') {
         lead.company_name = incomingText;
         lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
         botResponseText = `¡Gracias por la información! En unos momentos un asesor, asociado o proveedor se comunicará contigo.`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 3.5. Detección automática de palabras clave de ASESOR / PROVEEDOR / ASOCIADO
+      // 3.5. Detección automática de ASESOR
       const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
       if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
         let existingLead = await this.leadRepository.findOne({
@@ -227,63 +230,60 @@ export class WhatsappService {
         await this.leadRepository.save(existingLead);
 
         botResponseText = `🤝 Con mucho gusto te comunicaremos con el área correspondiente. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 4. COTIZACIÓN: Esperando Nombre
+      // 4. COTIZACIÓN: Flujo paso a paso
       let pendingQuote = await this.quoteRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
       });
 
       if (pendingQuote) {
         pendingQuote.client_name = incomingText;
-        pendingQuote.status = 'Esperando Teléfono'; // Pasamos al siguiente paso de pedir teléfono
+        pendingQuote.status = 'Esperando Teléfono';
         await this.quoteRepository.save(pendingQuote);
 
         botResponseText = `¡Gracias, ${incomingText}! Ahora, por favor indícanos tu *número telefónico de contacto*:`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 4.5. COTIZACIÓN: Esperando Teléfono personalizado
       let phoneQuote = await this.quoteRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
       });
 
       if (phoneQuote) {
-        phoneQuote.client_phone = incomingText; // Guardamos el teléfono limpio proporcionado
-        phoneQuote.status = 'Esperando Productos'; // Siguiente paso para pedir el detalle
+        phoneQuote.client_phone = incomingText;
+        phoneQuote.status = 'Esperando Productos';
         await this.quoteRepository.save(phoneQuote);
 
         botResponseText = `¡Perfecto! Por último, por favor indícanos qué productos y cantidades necesitas cotizar:`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 4.6. COTIZACIÓN: Esperando Detalle de Productos
       let activeQuote = await this.quoteRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
       });
 
       if (activeQuote) {
         activeQuote.products_requested = incomingText;
-        activeQuote.status = 'Pendiente'; // Estatus final visible en el panel como Pendiente de revisión
+        activeQuote.status = 'Pendiente';
         activeQuote.total_estimated = 0.00;
         await this.quoteRepository.save(activeQuote);
 
         botResponseText = `✅ ¡Cotización registrada con éxito!\n\n📋 *Detalle:* ${incomingText}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Gracias!`;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // Obtenemos todos los productos activos de la base de datos para las búsquedas
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
         order: { name: 'ASC' }
       });
 
-      // 5. BÚSQUEDA EXACTA DE PRODUCTO POR NOMBRE
+      // 5. BÚSQUEDA EXACTA DE PRODUCTO
       const matchedProduct = allProducts.find(p => normalizeStr(p.name) === cleanIncomingText);
 
       if (matchedProduct) {
@@ -293,20 +293,11 @@ export class WhatsappService {
           `\nStock: ${matchedProduct.stock} ${matchedProduct.unit || 'pza'}` +
           (matchedProduct.description ? `\n${matchedProduct.description}` : '');
 
-        if (matchedProduct.image_url) {
-          try {
-            const media = await MessageMedia.fromUrl(matchedProduct.image_url, { unsafeMime: true });
-            await client.sendMessage(senderNumber, media, { caption: details });
-          } catch (imgErr) {
-            await msg.reply(details);
-          }
-        } else {
-          await msg.reply(details);
-        }
+        await sock.sendMessage(senderNumber, { text: details });
         return;
       }
 
-      // 6. DETECCIÓN INTERACTIVA DE CATÁLOGO: FILTRAR POR LETRA O VER TODOS
+      // 6. CATÁLOGO INTERACTIVO
       if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
         let selectedProducts = allProducts;
 
@@ -316,12 +307,12 @@ export class WhatsappService {
 
         if (selectedProducts.length === 0) {
           botResponseText = `❌ No se encontraron productos que inicien con la letra "${incomingText.toUpperCase()}". Intenta con otra letra o escribe "Catálogo".`;
-          await msg.reply(botResponseText);
+          await sock.sendMessage(senderNumber, { text: botResponseText });
           return;
         }
 
         let catalogListText = cleanIncomingText === 'ver todos'
-          ? `📋 *Catálogo General (Mostrando primeros 20 nombres)*\nEscribe el nombre exacto de cualquiera para ver su foto, precio y detalles:\n`
+          ? `📋 *Catálogo General (Mostrando primeros 20 nombres)*\nEscribe el nombre exacto de cualquiera para ver su precio y detalles:\n`
           : `🔍 *Productos con la letra "${incomingText.toUpperCase()}" (${selectedProducts.length}):*\nEscribe el nombre exacto para ver sus detalles:\n`;
 
         selectedProducts.slice(0, 20).forEach((prod) => {
@@ -329,15 +320,15 @@ export class WhatsappService {
         });
 
         if (selectedProducts.length > 20) {
-          catalogListText += `\n\n*(Y ${selectedProducts.length - 20} productos más... Escribe una letra o nombre específico)*`;
+          catalogListText += `\n\n*(Y ${selectedProducts.length - 20} productos más...)*`;
         }
 
         botResponseText = catalogListText;
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
 
-      // 7. FLUJO NORMAL DE PALABRAS CLAVE CONFIGURADAS EN BASE DE DATOS
+      // 7. PALABRAS CLAVE
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
       });
@@ -345,7 +336,6 @@ export class WhatsappService {
 
       for (const rule of keywords) {
         const kw = normalizeStr(rule.keyword);
-
         if (rule.match_type === 'exact' && cleanIncomingText === kw) {
           matchedRule = rule;
           break;
@@ -358,29 +348,27 @@ export class WhatsappService {
       if (matchedRule) {
         if (matchedRule.response_type === 'text') {
           botResponseText = matchedRule.reply_text;
-          await msg.reply(botResponseText);
+          await sock.sendMessage(senderNumber, { text: botResponseText });
         } else if (matchedRule.response_type === 'quote') {
           botResponseText = `¡Con mucho gusto te ayudamos con tu cotización! 📝\n\nPara empezar, por favor dinos: *¿Cuál es tu nombre?*`;
-          await msg.reply(botResponseText);
+          await sock.sendMessage(senderNumber, { text: botResponseText });
 
           await this.quoteRepository.save({
             whatsapp_phone: whatsappPhone,
-            client_phone: senderNumber, // Temporal hasta que ingrese su teléfono
+            client_phone: senderNumber,
             client_name: '',
             products_requested: 'Esperando detalle de productos...',
             total_estimated: 0.00,
             status: 'Esperando Nombre'
           });
-
         } else if (matchedRule.response_type === 'product_search') {
           const totalProductsCount = allProducts.length;
-
-          botResponseText = `📦 ¡Hola! Actualmente contamos con un total de *${totalProductsCount} productos* registrados en nuestro catálogo.\n\n¿Cómo te gustaría consultarlos?\n\n1️⃣ Escribe *VER TODOS* para listar los nombres.\n2️⃣ O escribe una letra (ej. *A*, *B*, *C*...) para ver únicamente los productos que inician con esa letra.\n\n💡 *Tip:* Una vez que veas el nombre del producto que te interesa, escríbelo tal cual para ver su foto, precio y stock.`;
-          await msg.reply(botResponseText);
+          botResponseText = `📦 ¡Hola! Actualmente contamos con un total de *${totalProductsCount} productos* registrados.\n\nEscribe *VER TODOS* o una letra (ej. *A*, *B*...) para filtrar el catálogo.`;
+          await sock.sendMessage(senderNumber, { text: botResponseText });
         }
       } else {
         botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje.';
-        await msg.reply(botResponseText);
+        await sock.sendMessage(senderNumber, { text: botResponseText });
       }
 
       await this.chatLogRepository.save({
@@ -391,26 +379,17 @@ export class WhatsappService {
       });
 
     } catch (error) {
-      console.error('Error procesando mensaje:', error);
+      console.error('Error procesando mensaje con Baileys:', error);
     }
   }
 
   async getQrCode(whatsappPhone: string) {
-    // Forzamos una limpieza preventiva si el cliente quedó colgado en memoria
-    if (this.clients.has(whatsappPhone)) {
-      const client = this.clients.get(whatsappPhone);
-      try { await client?.destroy(); } catch (e) { }
-      this.clients.delete(whatsappPhone);
+    if (!this.sessions.has(whatsappPhone) && !this.initializing.has(whatsappPhone)) {
+      this.initWhatsAppClient(whatsappPhone);
     }
 
-    this.latestQrs.delete(whatsappPhone);
-    this.initializing.delete(whatsappPhone);
-
-    // Disparamos la inicialización limpia del cliente
-    this.initWhatsAppClient(whatsappPhone);
-
     let attempts = 0;
-    while (!this.latestQrs.has(whatsappPhone) && attempts < 10) {
+    while (!this.latestQrs.has(whatsappPhone) && attempts < 12) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       attempts++;
     }
@@ -426,35 +405,27 @@ export class WhatsappService {
   async disconnectWhatsApp(whatsappPhone: string) {
     try {
       this.latestQrs.delete(whatsappPhone);
-      const client = this.clients.get(whatsappPhone);
+      const sock = this.sessions.get(whatsappPhone);
 
-      if (client) {
-        try { await client.logout(); } catch (e) { }
-        try { await client.destroy(); } catch (e) { }
-        this.clients.delete(whatsappPhone);
+      if (sock) {
+        try { await sock.logout(); } catch (e) {}
+        this.sessions.delete(whatsappPhone);
       }
 
       this.initializing.delete(whatsappPhone);
       this.botStartTimes.delete(whatsappPhone);
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      // Limpieza profunda de la carpeta de autenticación de whatsapp-web.js
-      const authPath = path.resolve(process.cwd(), `.wwebjs_auth/session-phone-${whatsappPhone}`);
-      try {
-        if (fs.existsSync(authPath)) {
-          fs.rmSync(authPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 1000 });
-        }
-      } catch (fsErr) {
-        console.log('Nota: Los archivos de sesión se están liberando en disco.');
+      const authFolder = path.resolve(process.cwd(), `baileys_auth/session-${whatsappPhone}`);
+      if (fs.existsSync(authFolder)) {
+        fs.rmSync(authFolder, { recursive: true, force: true });
       }
 
       return { success: true, message: 'Sesión cerrada correctamente' };
     } catch (error) {
       console.error('Error en disconnectWhatsApp:', error);
-      this.initializing.delete(whatsappPhone);
-      this.clients.delete(whatsappPhone);
-      return { success: true, message: 'Sesión restablecida con éxito' };
+      return { success: true, message: 'Sesión reiniciada con éxito' };
     }
   }
 }
