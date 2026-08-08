@@ -33,7 +33,7 @@ export class WhatsappService {
     private leadRepository: Repository<Lead>,
     @InjectRepository(Quote)
     private quoteRepository: Repository<Quote>,
-  ) {}
+  ) { }
 
   async initWhatsAppClient(whatsappPhone: string) {
     if (this.initializing.has(whatsappPhone) || this.clients.has(whatsappPhone)) return;
@@ -42,21 +42,22 @@ export class WhatsappService {
     this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
 
     try {
-     const client = new Client({
+      const client = new Client({
         authStrategy: new LocalAuth({
           clientId: `phone-${whatsappPhone}`,
         }),
         puppeteer: {
           headless: true,
+          executablePath: process.env.CHROME_BIN || undefined, // Si está definido en Railway
           args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu',
-            '--disable-software-rasterizer'
+            '--single-process', // <- Este argumento evita que intente abrir múltiples procesos gráficos complejos
+            '--disable-gpu'
           ],
         },
       });
@@ -112,8 +113,8 @@ export class WhatsappService {
 
   private async handleIncomingMessage(whatsappPhone: string, msg: Message, client: Client) {
     try {
-      const settings = await this.settingRepository.findOne({ 
-        where: { whatsapp_phone: whatsappPhone } 
+      const settings = await this.settingRepository.findOne({
+        where: { whatsapp_phone: whatsappPhone }
       });
 
       if (settings && settings.is_bot_active === false) {
@@ -123,7 +124,7 @@ export class WhatsappService {
       if (settings) {
         const now = new Date();
         const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        
+
         if (settings.start_time && settings.end_time) {
           if (currentTime < settings.start_time || currentTime > settings.end_time) {
             return;
@@ -143,7 +144,7 @@ export class WhatsappService {
       if (!incomingText) return;
 
       let botResponseText = '';
-      const normalizeStr = (str: string) => 
+      const normalizeStr = (str: string) =>
         str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() : "";
 
       const cleanIncomingText = normalizeStr(incomingText);
@@ -163,7 +164,7 @@ export class WhatsappService {
           bot_response: botResponseText,
           whatsapp_phone: whatsappPhone,
         });
-        return; 
+        return;
       }
 
       // 1. Verificamos si este chat ya fue liberado para un asesor humano (assigned_to_human)
@@ -200,7 +201,7 @@ export class WhatsappService {
       // 3. LEAD: Recopilar Empresa / Compañía
       if (lead && lead.conversation_state === 'collecting_company') {
         lead.company_name = incomingText;
-        lead.conversation_state = 'assigned_to_human'; 
+        lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
         botResponseText = `¡Gracias por la información! En unos momentos un asesor, asociado o proveedor se comunicará contigo.`;
@@ -269,7 +270,7 @@ export class WhatsappService {
       if (activeQuote) {
         activeQuote.products_requested = incomingText;
         activeQuote.status = 'Pendiente'; // Estatus final visible en el panel como Pendiente de revisión
-        activeQuote.total_estimated = 0.00; 
+        activeQuote.total_estimated = 0.00;
         await this.quoteRepository.save(activeQuote);
 
         botResponseText = `✅ ¡Cotización registrada con éxito!\n\n📋 *Detalle:* ${incomingText}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Gracias!`;
@@ -320,7 +321,7 @@ export class WhatsappService {
           return;
         }
 
-        let catalogListText = cleanIncomingText === 'ver todos' 
+        let catalogListText = cleanIncomingText === 'ver todos'
           ? `📋 *Catálogo General (Mostrando primeros 20 nombres)*\nEscribe el nombre exacto de cualquiera para ver su foto, precio y detalles:\n`
           : `🔍 *Productos con la letra "${incomingText.toUpperCase()}" (${selectedProducts.length}):*\nEscribe el nombre exacto para ver sus detalles:\n`;
 
@@ -338,8 +339,8 @@ export class WhatsappService {
       }
 
       // 7. FLUJO NORMAL DE PALABRAS CLAVE CONFIGURADAS EN BASE DE DATOS
-      const keywords = await this.keywordRepository.find({ 
-        where: { whatsapp_phone: whatsappPhone, is_active: true } 
+      const keywords = await this.keywordRepository.find({
+        where: { whatsapp_phone: whatsappPhone, is_active: true }
       });
       let matchedRule: BotKeyword | null = null;
 
@@ -395,11 +396,11 @@ export class WhatsappService {
     }
   }
 
-async getQrCode(whatsappPhone: string) {
+  async getQrCode(whatsappPhone: string) {
     // Forzamos una limpieza preventiva si el cliente quedó colgado en memoria
     if (this.clients.has(whatsappPhone)) {
       const client = this.clients.get(whatsappPhone);
-      try { await client?.destroy(); } catch (e) {}
+      try { await client?.destroy(); } catch (e) { }
       this.clients.delete(whatsappPhone);
     }
 
@@ -429,14 +430,14 @@ async getQrCode(whatsappPhone: string) {
       const client = this.clients.get(whatsappPhone);
 
       if (client) {
-        try { await client.logout(); } catch (e) {}
-        try { await client.destroy(); } catch (e) {}
+        try { await client.logout(); } catch (e) { }
+        try { await client.destroy(); } catch (e) { }
         this.clients.delete(whatsappPhone);
       }
 
       this.initializing.delete(whatsappPhone);
       this.botStartTimes.delete(whatsappPhone);
-      
+
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
       // Limpieza profunda de la carpeta de autenticación de whatsapp-web.js
