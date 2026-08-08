@@ -42,13 +42,15 @@ export class WhatsappService {
     this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
 
     try {
-      const client = new Client({
+     const client = new Client({
         authStrategy: new LocalAuth({
           clientId: `phone-${whatsappPhone}`,
         }),
         puppeteer: {
           headless: true,
-          executablePath: process.env.CHROME_BIN || undefined, // Si está definido en Railway
+          executablePath: '/nix/store/.../bin/chromium', // O de forma genérica:
+          // Dejemos que busque el ejecutable del sistema:
+          executablePath: process.env.CHROME_BIN || '/usr/bin/chromium',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -56,8 +58,8 @@ export class WhatsappService {
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // <- Este argumento evita que intente abrir múltiples procesos gráficos complejos
-            '--disable-gpu'
+            '--single-process',
+            '--disable-gpu',
           ],
         },
       });
