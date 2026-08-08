@@ -37,7 +37,7 @@ export class WhatsappService {
     private leadRepository: Repository<Lead>,
     @InjectRepository(Quote)
     private quoteRepository: Repository<Quote>,
-  ) {}
+  ) { }
 
   async initWhatsAppClient(whatsappPhone: string) {
     if (this.initializing.has(whatsappPhone) || this.sessions.has(whatsappPhone)) return;
@@ -96,8 +96,8 @@ export class WhatsappService {
         const senderNumber = msg.key.remoteJid;
         if (!senderNumber || senderNumber.includes('@g.us')) return; // Ignorar grupos
 
-        const messageTimestamp = typeof msg.messageTimestamp === 'number' 
-          ? msg.messageTimestamp 
+        const messageTimestamp = typeof msg.messageTimestamp === 'number'
+          ? msg.messageTimestamp
           : Number(msg.messageTimestamp || 0);
 
         const startTime = this.botStartTimes.get(whatsappPhone) || 0;
@@ -411,7 +411,7 @@ export class WhatsappService {
       const sock = this.sessions.get(whatsappPhone);
 
       if (sock) {
-        try { await sock.logout(); } catch (e) {}
+        try { await sock.logout(); } catch (e) { }
         this.sessions.delete(whatsappPhone);
       }
 
@@ -430,5 +430,19 @@ export class WhatsappService {
       console.error('Error en disconnectWhatsApp:', error);
       return { success: true, message: 'Sesión reiniciada con éxito' };
     }
+  }
+  // En tu WhatsappService (backend)
+  async checkConnectionStatus(whatsappPhone: string) {
+    const authFolder = path.resolve(process.cwd(), `baileys_auth/session-${whatsappPhone}`);
+    const credsPath = path.resolve(authFolder, 'creds.json');
+
+    // Si ya existe la sesión en memoria o el archivo creds.json en disco, está conectado
+    const isConnectedInMemory = this.sessions.has(whatsappPhone);
+    const isConnectedInDisk = fs.existsSync(credsPath);
+
+    return {
+      connected: isConnectedInMemory || isConnectedInDisk,
+      message: (isConnectedInMemory || isConnectedInDisk) ? 'Conectado' : 'Desconectado'
+    };
   }
 }
