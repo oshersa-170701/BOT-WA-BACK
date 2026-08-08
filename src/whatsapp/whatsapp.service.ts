@@ -46,10 +46,8 @@ export class WhatsappService {
         authStrategy: new LocalAuth({
           clientId: `phone-${whatsappPhone}`,
         }),
-        puppeteer: {
+       puppeteer: {
           headless: true,
-          executablePath: '/nix/store/.../bin/chromium', // O de forma genérica:
-          // Dejemos que busque el ejecutable del sistema:
           executablePath: process.env.CHROME_BIN || '/usr/bin/chromium',
           args: [
             '--no-sandbox',
