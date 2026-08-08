@@ -46,9 +46,8 @@ export class WhatsappService {
         authStrategy: new LocalAuth({
           clientId: `phone-${whatsappPhone}`,
         }),
-       puppeteer: {
+   puppeteer: {
           headless: true,
-          executablePath: process.env.CHROME_BIN || '/usr/bin/chromium',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
