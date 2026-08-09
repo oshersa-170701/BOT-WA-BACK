@@ -212,7 +212,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 3. FLUJO DE LEADS (ASESOR) PASO A PASO (¡DEBE IR PRIMERO PARA CAPTURAR LA EMPRESA SIN INTERRUPCIONES!)
+      // 3. FLUJO DE LEADS (ASESOR) PASO A PASO
       if (lead && lead.conversation_state === 'collecting_name') {
         lead.client_name = incomingText;
         lead.conversation_state = 'collecting_phone';
@@ -234,8 +234,8 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText; // 👈 Guarda correctamente el negocio o empresa
-        lead.conversation_state = 'assigned_to_human'; // 👈 El bot termina el chat y cede el control al asesor
+        lead.company_name = incomingText;
+        lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
         botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor, asociado o proveedor se comunicará contigo para continuar la conversación. ¡Gracias por tu paciencia!`;
@@ -265,10 +265,10 @@ export class WhatsappService implements OnModuleInit {
       if (phoneQuote) {
         phoneQuote.client_phone = incomingText;
         phoneQuote.status = 'Esperando Productos';
-        phoneQuote.products_requested = ''; // Inicializamos vacío para ir acumulando
+        phoneQuote.products_requested = '';
         await this.quoteRepository.save(phoneQuote);
 
-        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 sacos de cemento* o usa el número de nuestro *Catálogo*):`;
+        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 sacos de cemento*).\n\nCuando termines de agregar tus productos, escribe *Finalizar* para guardar tu cotización.`;
         await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
@@ -278,7 +278,6 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (activeQuote) {
-        // Verificamos si el cliente desea finalizar la cotización
         if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
           if (!activeQuote.products_requested || activeQuote.products_requested.trim() === '') {
             botResponseText = `⚠️ Aún no has agregado ningún producto. Por favor escribe qué producto necesitas o escribe *Cancelar*.`;
@@ -286,7 +285,7 @@ export class WhatsappService implements OnModuleInit {
             return;
           }
 
-          activeQuote.status = 'Pendiente'; // 👈 Se guarda con estatus Pendiente para el panel
+          activeQuote.status = 'Pendiente';
           await this.quoteRepository.save(activeQuote);
 
           botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuote.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
@@ -294,15 +293,15 @@ export class WhatsappService implements OnModuleInit {
           return;
         }
 
-        // Si no ha finalizado, acumulamos el producto ingresado con su cantidad
         const currentProducts = activeQuote.products_requested ? activeQuote.products_requested + '\n• ' : '• ';
         activeQuote.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuote);
 
-        botResponseText = `🛒 Producto agregado correctamente.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir tu cotización.`;
+        botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
         await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
+
       // 5. BIENVENIDA O SALUDO INICIAL
       const previousChatsCount = await this.chatLogRepository.count({
         where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
@@ -378,7 +377,7 @@ export class WhatsappService implements OnModuleInit {
             whatsapp_phone: whatsappPhone,
             client_phone: senderNumber,
             client_name: '',
-            products_requested: 'Esperando detalle de productos...',
+            products_requested: '',
             total_estimated: 0.00,
             status: 'Esperando Nombre'
           });
@@ -489,6 +488,7 @@ export class WhatsappService implements OnModuleInit {
       console.error('Error procesando mensaje con Baileys:', error);
     }
   }
+
   private async sendCatalogPage(whatsappPhone: string, senderNumber: string, sock: any, page: number) {
     const allProducts = await this.productRepository.find({
       where: { whatsapp_phone: whatsappPhone, status: true },
