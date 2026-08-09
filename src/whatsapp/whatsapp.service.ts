@@ -315,7 +315,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      const allProducts = await this.productRepository.find({
+    const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
         order: { name: 'ASC' }
       });
@@ -330,7 +330,36 @@ export class WhatsappService implements OnModuleInit {
           `\nStock: ${matchedProduct.stock} ${matchedProduct.unit || 'pza'}` +
           (matchedProduct.description ? `\n${matchedProduct.description}` : '');
 
-        await sock.sendMessage(senderNumber, { text: details });
+        // Si el producto tiene imagen registrada, enviamos la imagen junto con la información
+        if (matchedProduct.image_url && matchedProduct.image_url.startsWith('http')) {
+          await sock.sendMessage(senderNumber, { 
+            image: { url: matchedProduct.image_url }, 
+            caption: details 
+          });
+        } else {
+          await sock.sendMessage(senderNumber, { text: details });
+        }
+        return;
+      }
+
+      // 5.5. BÚSQUEDA INTELIGENTE POR CATEGORÍA O TÉRMINO PARCIAL (Ej. "palas", "tornillos")
+      const matchedByCategoryOrPartial = allProducts.filter(p => 
+        (p.category && normalizeStr(p.category).includes(cleanIncomingText)) ||
+        (p.name && normalizeStr(p.name).includes(cleanIncomingText))
+      );
+
+      if (matchedByCategoryOrPartial.length > 0 && cleanIncomingText.length > 2) {
+        let categoryResultsText = `🔍 *Encontramos ${matchedByCategoryOrPartial.length} productos relacionados con "${incomingText}":*\n\nEscribe el nombre exacto de tu preferencia para ver su información e imagen:\n`;
+
+        matchedByCategoryOrPartial.slice(0, 15).forEach((prod) => {
+          categoryResultsText += `\n• ${prod.name} ($${prod.price})`;
+        });
+
+        if (matchedByCategoryOrPartial.length > 15) {
+          categoryResultsText += `\n\n*(Y ${matchedByCategoryOrPartial.length - 15} productos más...)*`;
+        }
+
+        await sock.sendMessage(senderNumber, { text: categoryResultsText });
         return;
       }
 
