@@ -139,7 +139,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
+  private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
@@ -204,7 +204,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
         where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
       });
 
-      if (phoneQuote => pendingQuotePhone) { // Manteniendo la lógica limpia
+      if (pendingQuotePhone) {
         pendingQuotePhone.client_phone = incomingText;
         pendingQuotePhone.status = 'Esperando Productos';
         pendingQuotePhone.products_requested = '';
@@ -228,7 +228,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
             return;
           }
 
-          activeQuoteProducts.status = 'Pendiente'; // 👈 Guarda el estatus final para la tabla del panel
+          activeQuoteProducts.status = 'Pendiente';
           await this.quoteRepository.save(activeQuoteProducts);
 
           botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteProducts.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
@@ -236,14 +236,13 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
           return;
         }
 
-        // Acumular producto e indicar confirmación al usuario SIN ACTIVAR NINGÚN FALLBACK
         const currentProducts = activeQuoteProducts.products_requested ? activeQuoteProducts.products_requested + '\n• ' : '• ';
         activeQuoteProducts.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuoteProducts);
 
         botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return; // 👈 Retorno estricto para evitar que pase a los comandos de catálogo o fallback
+        return;
       }
 
       // =========================================================================
@@ -438,7 +437,6 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
 
       let matchedProduct: Product | undefined = undefined;
 
-      // 💡 CORRECCIÓN CRÍTICA: El índice numérico mapea directamente contra el elemento global calculado
       if (/^\d+$/.test(cleanIncomingText)) {
         const index = parseInt(cleanIncomingText, 10) - 1;
         if (index >= 0 && index < allProducts.length) {
@@ -525,40 +523,13 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
     let catalogText = `📋 *Catálogo de Productos* (Pg. ${page + 1}/${totalPages})\n\nEscribe el *número global* o *nombre* para ver detalles:\n`;
 
     pageProducts.forEach((prod, idx) => {
-      const itemNumber = startIdx + idx + 1; // 👈 Mantiene el índice global correlativo exacto (1, 2, 3... hasta el total de productos)
-      catalogText += `\n*${itemNumber}.* ${prod.name} - *$${prod.price}*`;
-    });
-
-    catalogText += `\n\n👇 *Opciones:*\n• Escribe *Siguiente* para ver más.\n• Escribe *Terminar* para cerrar el chat.`;
-
-    await sock.sendMessage(senderNumberFull, { text: catalogText });
-  }
-  private async sendCatalogPage(whatsappPhone: string, senderNumber: string, sock: any, page: number) {
-    const allProducts = await this.productRepository.find({
-      where: { whatsapp_phone: whatsappPhone, status: true },
-      order: { name: 'ASC' }
-    });
-
-    if (allProducts.length === 0) {
-      await sock.sendMessage(senderNumber, { text: '❌ No hay productos disponibles en este momento.' });
-      return;
-    }
-
-    const pageSize = 12;
-    const totalPages = Math.ceil(allProducts.length / pageSize);
-    const startIdx = page * pageSize;
-    const pageProducts = allProducts.slice(startIdx, startIdx + pageSize);
-
-    let catalogText = `📋 *Catálogo de Productos* (Pg. ${page + 1}/${totalPages})\n\nEscribe el *número* o *nombre* para ver detalles:\n`;
-
-    pageProducts.forEach((prod, idx) => {
       const itemNumber = startIdx + idx + 1;
       catalogText += `\n*${itemNumber}.* ${prod.name} - *$${prod.price}*`;
     });
 
     catalogText += `\n\n👇 *Opciones:*\n• Escribe *Siguiente* para ver más.\n• Escribe *Terminar* para cerrar el chat.`;
 
-    await sock.sendMessage(senderNumber, { text: catalogText });
+    await sock.sendMessage(senderNumberFull, { text: catalogText });
   }
 
   async getQrCode(whatsappPhone: string) {
