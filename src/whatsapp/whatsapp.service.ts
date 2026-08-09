@@ -89,11 +89,14 @@ export class WhatsappService implements OnModuleInit {
           }
         }
 
-        if (connection === 'open') {
+       if (connection === 'open') {
           console.log(`[Teléfono ${whatsappPhone}] ¡WhatsApp conectado y listo con Baileys!`);
           this.latestQrs.delete(whatsappPhone);
           this.initializing.delete(whatsappPhone);
           this.botStartTimes.set(whatsappPhone, Math.floor(Date.now() / 1000));
+          
+          // 💡 Asegurar que el socket activo quede guardado en el Map principal
+          this.sessions.set(whatsappPhone, sock);
         }
 
         if (connection === 'close') {
