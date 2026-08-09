@@ -8,9 +8,9 @@ export class BotSettingsController {
   constructor(private readonly botSettingsService: BotSettingsService) { }
 
   // 1. Ruta fija PRIMERO para evitar conflictos con parámetros
-  @Post('load')
+ @Post('load')
   async getSettingsByPhone(@Body() body: { whatsappPhone: string }) {
-    return await this.botSettingsService.findOneByPhone(body.whatsappPhone);
+    return await this.botSettingsService.findByPhone(body.whatsappPhone); // 👈 Cambiado a findByPhone
   }
 
   // Crear configuración inicial vinculada al teléfono
