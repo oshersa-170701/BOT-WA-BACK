@@ -139,7 +139,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
+private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
@@ -167,8 +167,10 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      const senderNumberFull = msg.key.remoteJid; // ej: 5219514446677@s.whatsapp.net
-      const cleanSenderPhone = senderNumberFull ? senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '') : '';
+      const senderNumberFull = msg.key.remoteJid || '';
+      // 💡 Normalizamos el teléfono para trabajar siempre con un estándar limpio sin sufijos
+      const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
+      
       const messageContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       const incomingText = messageContent.trim();
       if (!incomingText) return;
@@ -179,12 +181,77 @@ export class WhatsappService implements OnModuleInit {
 
       const cleanIncomingText = normalizeStr(incomingText);
 
-      // 1. Verificar si el chat ya fue asignado a un asesor humano o finalizado (buscando flexiblemente)
+      // =========================================================================
+      // 1. REVISAR SI EXISTE UN FLUJO DE COTIZACIÓN ACTIVO (PRIORIDAD MÁXIMA)
+      // =========================================================================
+      
+      // Paso 1.1: Esperando Nombre
+      let pendingQuoteName = await this.quoteRepository.findOne({
+        where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
+      });
+
+      if (pendingQuoteName) {
+        pendingQuoteName.client_name = incomingText;
+        pendingQuoteName.status = 'Esperando Teléfono';
+        await this.quoteRepository.save(pendingQuoteName);
+
+        botResponseText = `¡Gracias, ${incomingText}! Ahora, por favor indícanos tu *número telefónico de contacto*:`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      // Paso 1.2: Esperando Teléfono
+      let pendingQuotePhone = await this.quoteRepository.findOne({
+        where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
+      });
+
+      if (pendingQuotePhone) {
+        pendingQuotePhone.client_phone = incomingText;
+        pendingQuotePhone.status = 'Esperando Productos';
+        pendingQuotePhone.products_requested = '';
+        await this.quoteRepository.save(pendingQuotePhone);
+
+        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar (ej. *10 piezas de armella* o usa el número de nuestro *Catálogo*).\n\nCuando termines de agregar tus productos, escribe *Finalizar* para guardar tu cotización.`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      // Paso 1.3: Esperando Productos (Acumulación e ingreso de productos)
+      let activeQuoteProducts = await this.quoteRepository.findOne({
+        where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
+      });
+
+      if (activeQuoteProducts) {
+        if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
+          if (!activeQuoteProducts.products_requested || activeQuoteProducts.products_requested.trim() === '') {
+            botResponseText = `⚠️ Aún no has agregado ningún producto. Escribe qué producto necesitas o escribe *Cancelar*.`;
+            await sock.sendMessage(senderNumberFull, { text: botResponseText });
+            return;
+          }
+
+          activeQuoteProducts.status = 'Pendiente'; // 👈 Guarda el estatus final para la tabla del panel
+          await this.quoteRepository.save(activeQuoteProducts);
+
+          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteProducts.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+
+        // Acumular producto e indicar confirmación al usuario
+        const currentProducts = activeQuoteProducts.products_requested ? activeQuoteProducts.products_requested + '\n• ' : '• ';
+        activeQuoteProducts.products_requested = currentProducts + incomingText;
+        await this.quoteRepository.save(activeQuoteProducts);
+
+        botResponseText = `🛒 Producto agregado correctamente.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      // =========================================================================
+      // 2. REVISAR SI EXISTE UN FLUJO DE LEAD / ASESOR ACTIVO
+      // =========================================================================
       let lead = await this.leadRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-        ]
+        where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
       });
 
       if (lead && lead.conversation_state === 'assigned_to_human') {
@@ -197,45 +264,6 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // 2. COMANDO PARA TERMINAR SESIÓN / CERRAR CHAT MANUALMENTE
-      const endSessionTriggers = ['salir', 'terminar', 'adios', 'adiós', 'finalizar', 'gracias'];
-      if (endSessionTriggers.some(trigger => cleanIncomingText === trigger)) {
-        // Verificamos si estamos en medio de una cotización para cerrarla primero antes de salir por completo
-        let activeQuoteCheck = await this.quoteRepository.findOne({
-          where: [
-            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' },
-            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
-          ]
-        });
-
-        if (activeQuoteCheck && (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar')) {
-          if (activeQuoteCheck.products_requested && activeQuoteCheck.products_requested.trim() !== '') {
-            activeQuoteCheck.status = 'Pendiente';
-            await this.quoteRepository.save(activeQuoteCheck);
-
-            botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen:*\n${activeQuoteCheck.products_requested}\n\nUn asesor te contactará en breve. ¡Gracias!`;
-            await sock.sendMessage(senderNumberFull, { text: botResponseText });
-            return;
-          }
-        }
-
-        botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo*.`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-
-        if (!lead) {
-          lead = this.leadRepository.create({
-            client_phone: cleanSenderPhone,
-            whatsapp_phone: whatsappPhone,
-            conversation_state: 'assigned_to_human'
-          });
-        } else {
-          lead.conversation_state = 'assigned_to_human';
-        }
-        await this.leadRepository.save(lead);
-        return;
-      }
-
-      // 3. FLUJO DE LEADS (ASESOR) PASO A PASO
       if (lead && lead.conversation_state === 'collecting_name') {
         lead.client_name = incomingText;
         lead.conversation_state = 'collecting_phone';
@@ -257,7 +285,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText;
+        lead.company_name = incomingText; // 👈 Guarda el negocio correctamente en el panel
         lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
@@ -266,80 +294,32 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 4. FLUJO DE COTIZACIÓN PASO A PASO (CON BÚSQUEDA FLEXIBLE)
-      let pendingQuote = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
-        ]
-      });
-
-      if (pendingQuote) {
-        pendingQuote.client_name = incomingText;
-        pendingQuote.status = 'Esperando Teléfono';
-        await this.quoteRepository.save(pendingQuote);
-
-        botResponseText = `¡Gracias, ${incomingText}! Ahora, por favor indícanos tu *número telefónico de contacto*:`;
+      // =========================================================================
+      // 3. COMANDOS GENERALES Y SALIDA MANUAL
+      // =========================================================================
+      const endSessionTriggers = ['salir', 'terminar', 'adios', 'adiós', 'finalizar', 'gracias'];
+      if (endSessionTriggers.some(trigger => cleanIncomingText === trigger)) {
+        botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo*.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
 
-      let phoneQuote = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
-        ]
-      });
-
-      if (phoneQuote) {
-        phoneQuote.client_phone = incomingText;
-        phoneQuote.status = 'Esperando Productos';
-        phoneQuote.products_requested = '';
-        await this.quoteRepository.save(phoneQuote);
-
-        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar (ej. *10 piezas de armella* o usa el número de nuestro *Catálogo*).\n\nCuando termines, escribe *Finalizar* para guardar tu cotización.`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      let activeQuote = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
-        ]
-      });
-
-      if (activeQuote) {
-        if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
-          if (!activeQuote.products_requested || activeQuote.products_requested.trim() === '') {
-            botResponseText = `⚠️ Aún no has agregado ningún producto. Escribe qué producto necesitas o escribe *Cancelar*.`;
-            await sock.sendMessage(senderNumberFull, { text: botResponseText });
-            return;
-          }
-
-          activeQuote.status = 'Pendiente';
-          await this.quoteRepository.save(activeQuote);
-
-          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuote.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
-          await sock.sendMessage(senderNumberFull, { text: botResponseText });
-          return;
+        if (!lead) {
+          lead = this.leadRepository.create({
+            client_phone: cleanSenderPhone,
+            whatsapp_phone: whatsappPhone,
+            conversation_state: 'assigned_to_human'
+          });
+        } else {
+          lead.conversation_state = 'assigned_to_human';
         }
-
-        const currentProducts = activeQuote.products_requested ? activeQuote.products_requested + '\n• ' : '• ';
-        activeQuote.products_requested = currentProducts + incomingText;
-        await this.quoteRepository.save(activeQuote);
-
-        botResponseText = `🛒 Producto agregado correctamente.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        await this.leadRepository.save(lead);
         return;
       }
 
-      // 5. BIENVENIDA O SALUDO INICIAL
+      // =========================================================================
+      // 4. BIENVENIDA O SALUDO INICIAL
+      // =========================================================================
       const previousChatsCount = await this.chatLogRepository.count({
-        where: [
-          { phone_number: senderNumberFull, whatsapp_phone: whatsappPhone },
-          { phone_number: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-        ]
+        where: { phone_number: cleanSenderPhone, whatsapp_phone: whatsappPhone }
       });
 
       if (previousChatsCount === 0 || cleanIncomingText === 'hola') {
@@ -360,14 +340,13 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 6. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
+      // =========================================================================
+      // 5. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
+      // =========================================================================
       const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
       if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
         let existingLead = await this.leadRepository.findOne({
-          where: [
-            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
-            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-          ]
+          where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
         });
 
         if (!existingLead) {
@@ -386,7 +365,9 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 7. EVALUAR PALABRAS CLAVE CONFIGURADAS
+      // =========================================================================
+      // 6. PALABRAS CLAVE CONFIGURADAS
+      // =========================================================================
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
       });
@@ -434,13 +415,14 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 8. CARGAR PRODUCTOS PARA BÚSQUEDA Y CATÁLOGO
+      // =========================================================================
+      // 7. CATÁLOGOS Y BÚSQUEDA SECUNDARIA DE PRODUCTOS
+      // =========================================================================
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
         order: { name: 'ASC' }
       });
 
-      // 8.0. COMANDO "SIGUIENTE" O "MÁS"
       if (cleanIncomingText === 'siguiente' || cleanIncomingText === 'mas' || cleanIncomingText === 'más') {
         let currentPage = this.catalogPages.get(cleanSenderPhone) || 0;
         currentPage++;
@@ -455,7 +437,6 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 8.1. BÚSQUEDA EXACTA O POR NÚMERO DE LISTA
       let matchedProduct: Product | undefined = undefined;
 
       if (/^\d+$/.test(cleanIncomingText)) {
@@ -487,7 +468,6 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 8.2. BÚSQUEDA POR CATEGORÍA O PARCIAL
       const matchedByCategoryOrPartial = allProducts.filter(p =>
         (p.category && normalizeStr(p.category).includes(cleanIncomingText)) ||
         (p.name && normalizeStr(p.name).includes(cleanIncomingText))
@@ -504,14 +484,15 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 8.3. COMANDO "VER TODOS"
       if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
         this.catalogPages.set(cleanSenderPhone, 0);
         await this.sendCatalogPage(whatsappPhone, senderNumberFull, sock, 0);
         return;
       }
 
-      // 9. FALLBACK GENERAL
+      // =========================================================================
+      // 8. FALLBACK GENERAL
+      // =========================================================================
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
       await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
@@ -526,7 +507,6 @@ export class WhatsappService implements OnModuleInit {
       console.error('Error procesando mensaje con Baileys:', error);
     }
   }
-
   private async sendCatalogPage(whatsappPhone: string, senderNumber: string, sock: any, page: number) {
     const allProducts = await this.productRepository.find({
       where: { whatsapp_phone: whatsappPhone, status: true },
