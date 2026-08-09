@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import makeWASocket, {
@@ -18,7 +18,7 @@ import { Lead } from 'src/leads/lead.entity';
 import { Quote } from 'src/quotes/entities/quote.entity';
 
 @Injectable()
-export class WhatsappService {
+export class WhatsappService implements OnModuleInit {
   private sessions: Map<string, any> = new Map();
   private latestQrs: Map<string, string> = new Map();
   private initializing: Set<string> = new Set();
@@ -38,6 +38,28 @@ export class WhatsappService {
     @InjectRepository(Quote)
     private quoteRepository: Repository<Quote>,
   ) { }
+
+  // 💡 AUTO-RECUPERAR SESIONES AL INICIAR EL BACKEND
+  async onModuleInit() {
+    try {
+      const baseAuthDir = path.resolve(process.cwd(), 'baileys_auth');
+      if (fs.existsSync(baseAuthDir)) {
+        const folders = fs.readdirSync(baseAuthDir);
+        for (const folder of folders) {
+          if (folder.startsWith('session-')) {
+            const whatsappPhone = folder.replace('session-', '');
+            const credsPath = path.resolve(baseAuthDir, folder, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+              console.log(`[Auto-Restauración] Encontrada sesión activa en disco para: ${whatsappPhone}. Levantando socket...`);
+              this.initWhatsAppClient(whatsappPhone);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error auto-restaurando sesiones de WhatsApp:', e);
+    }
+  }
 
   async initWhatsAppClient(whatsappPhone: string) {
     if (this.initializing.has(whatsappPhone) || this.sessions.has(whatsappPhone)) return;
@@ -75,13 +97,25 @@ export class WhatsappService {
         }
 
         if (connection === 'close') {
-          const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
-          console.log(`[Teléfono ${whatsappPhone}] WhatsApp desconectado. Reconectando:`, shouldReconnect);
+          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          
+          console.log(`[Teléfono ${whatsappPhone}] WhatsApp desconectado (Código: ${statusCode}). Reconectando:`, shouldReconnect);
+          
           this.sessions.delete(whatsappPhone);
           this.latestQrs.delete(whatsappPhone);
           this.initializing.delete(whatsappPhone);
-          if (shouldReconnect) {
-            this.initWhatsAppClient(whatsappPhone);
+
+          // Si el usuario cerró sesión explícitamente desde su app de WhatsApp Business, borramos credenciales
+          if (statusCode === DisconnectReason.loggedOut) {
+            if (fs.existsSync(authFolder)) {
+              fs.rmSync(authFolder, { recursive: true, force: true });
+            }
+          } else if (shouldReconnect) {
+            // Esperamos 3 segundos antes de reintentar la conexión para evitar saturar el socket
+            setTimeout(() => {
+              this.initWhatsAppClient(whatsappPhone);
+            }, 3000);
           }
         }
       });
@@ -94,7 +128,7 @@ export class WhatsappService {
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
-        if (!senderNumber || senderNumber.includes('@g.us')) return; // Ignorar grupos
+        if (!senderNumber || senderNumber.includes('@g.us') || senderNumber.includes('status')) return; 
 
         const messageTimestamp = typeof msg.messageTimestamp === 'number'
           ? msg.messageTimestamp
@@ -431,12 +465,11 @@ export class WhatsappService {
       return { success: true, message: 'Sesión reiniciada con éxito' };
     }
   }
-  // En tu WhatsappService (backend)
+
   async checkConnectionStatus(whatsappPhone: string) {
     const authFolder = path.resolve(process.cwd(), `baileys_auth/session-${whatsappPhone}`);
     const credsPath = path.resolve(authFolder, 'creds.json');
 
-    // Si ya existe la sesión en memoria o el archivo creds.json en disco, está conectado
     const isConnectedInMemory = this.sessions.has(whatsappPhone);
     const isConnectedInDisk = fs.existsSync(credsPath);
 
