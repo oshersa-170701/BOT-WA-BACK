@@ -100,7 +100,7 @@ export class WhatsappService implements OnModuleInit {
         if (connection === 'close') {
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-          
+
           this.sessions.delete(whatsappPhone);
           this.latestQrs.delete(whatsappPhone);
           this.initializing.delete(whatsappPhone);
@@ -125,7 +125,7 @@ export class WhatsappService implements OnModuleInit {
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
-        if (!senderNumber || senderNumber.includes('@g.us') || senderNumber.includes('status')) return; 
+        if (!senderNumber || senderNumber.includes('@g.us') || senderNumber.includes('status')) return;
 
         await this.handleIncomingMessage(whatsappPhone, msg, sock);
       });
@@ -139,7 +139,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
+  private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
@@ -243,7 +243,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
         return;
       }
 
-      // 4. FLUJO DE COTIZACIÓN PASO A PASO (¡DEBE IR ANTES DE LAS PALABRAS CLAVE!)
+      // 4. FLUJO DE COTIZACIÓN PASO A PASO (INTERACTIVO Y ACUMULATIVO)
       let pendingQuote = await this.quoteRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
       });
@@ -265,9 +265,10 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
       if (phoneQuote) {
         phoneQuote.client_phone = incomingText;
         phoneQuote.status = 'Esperando Productos';
+        phoneQuote.products_requested = ''; // Inicializamos vacío para ir acumulando
         await this.quoteRepository.save(phoneQuote);
 
-        botResponseText = `¡Perfecto! Por último, por favor indícanos qué productos y cantidades necesitas cotizar:`;
+        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 sacos de cemento* o usa el número de nuestro *Catálogo*):`;
         await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
@@ -277,16 +278,31 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
       });
 
       if (activeQuote) {
-        activeQuote.products_requested = incomingText;
-        activeQuote.status = 'Pendiente';
-        activeQuote.total_estimated = 0.00;
+        // Verificamos si el cliente desea finalizar la cotización
+        if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
+          if (!activeQuote.products_requested || activeQuote.products_requested.trim() === '') {
+            botResponseText = `⚠️ Aún no has agregado ningún producto. Por favor escribe qué producto necesitas o escribe *Cancelar*.`;
+            await sock.sendMessage(senderNumber, { text: botResponseText });
+            return;
+          }
+
+          activeQuote.status = 'Pendiente'; // 👈 Se guarda con estatus Pendiente para el panel
+          await this.quoteRepository.save(activeQuote);
+
+          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuote.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
+          await sock.sendMessage(senderNumber, { text: botResponseText });
+          return;
+        }
+
+        // Si no ha finalizado, acumulamos el producto ingresado con su cantidad
+        const currentProducts = activeQuote.products_requested ? activeQuote.products_requested + '\n• ' : '• ';
+        activeQuote.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuote);
 
-        botResponseText = `✅ ¡Cotización registrada con éxito!\n\n📋 *Detalle:* ${incomingText}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¿Deseas *terminar* la sesión o necesitas ver algo más?`;
+        botResponseText = `🛒 Producto agregado correctamente.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir tu cotización.`;
         await sock.sendMessage(senderNumber, { text: botResponseText });
         return;
       }
-
       // 5. BIENVENIDA O SALUDO INICIAL
       const previousChatsCount = await this.chatLogRepository.count({
         where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
@@ -391,7 +407,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
       if (cleanIncomingText === 'siguiente' || cleanIncomingText === 'mas' || cleanIncomingText === 'más') {
         let currentPage = this.catalogPages.get(senderNumber) || 0;
         currentPage++;
-        
+
         const maxPages = Math.ceil(allProducts.length / 12);
         if (currentPage >= maxPages) {
           currentPage = 0;
@@ -424,8 +440,8 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
           (matchedProduct.description ? `\n${matchedProduct.description}` : '');
 
         if (matchedProduct.image_url && matchedProduct.image_url.startsWith('http')) {
-          await sock.sendMessage(senderNumber, { 
-            image: { url: matchedProduct.image_url }, 
+          await sock.sendMessage(senderNumber, {
+            image: { url: matchedProduct.image_url },
             caption: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*`
           });
         } else {
@@ -435,7 +451,7 @@ private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) 
       }
 
       // 8.2. BÚSQUEDA POR CATEGORÍA O PARCIAL
-      const matchedByCategoryOrPartial = allProducts.filter(p => 
+      const matchedByCategoryOrPartial = allProducts.filter(p =>
         (p.category && normalizeStr(p.category).includes(cleanIncomingText)) ||
         (p.name && normalizeStr(p.name).includes(cleanIncomingText))
       );
