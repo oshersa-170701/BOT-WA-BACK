@@ -123,7 +123,7 @@ export class WhatsappService implements OnModuleInit {
 
       sock.ev.on('creds.update', saveCreds);
 
-      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -131,13 +131,7 @@ export class WhatsappService implements OnModuleInit {
         const senderNumber = msg.key.remoteJid;
         if (!senderNumber || senderNumber.includes('@g.us') || senderNumber.includes('status')) return; 
 
-        const messageTimestamp = typeof msg.messageTimestamp === 'number'
-          ? msg.messageTimestamp
-          : Number(msg.messageTimestamp || 0);
-
-        const startTime = this.botStartTimes.get(whatsappPhone) || 0;
-        if (messageTimestamp && messageTimestamp < startTime) return;
-
+        // 💡 Eliminamos el filtro de messageTimestamp que bloqueaba los mensajes de WhatsApp Business
         await this.handleIncomingMessage(whatsappPhone, msg, sock);
       });
 
@@ -485,7 +479,14 @@ export class WhatsappService implements OnModuleInit {
       const sock = this.sessions.get(whatsappPhone);
 
       if (sock) {
-        try { await sock.logout(); } catch (e) { }
+        try { 
+          await sock.logout(); 
+        } catch (e) { }
+        
+        try { 
+          sock.end(undefined); 
+        } catch (e) { }
+
         this.sessions.delete(whatsappPhone);
       }
 
@@ -494,15 +495,16 @@ export class WhatsappService implements OnModuleInit {
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
+      // 💡 Borramos físicamente la carpeta de autenticación en disco
       const authFolder = path.resolve(process.cwd(), `baileys_auth/session-${whatsappPhone}`);
       if (fs.existsSync(authFolder)) {
         fs.rmSync(authFolder, { recursive: true, force: true });
       }
 
-      return { success: true, message: 'Sesión cerrada correctamente' };
+      return { success: true, message: 'Sesión cerrada y desvinculada correctamente' };
     } catch (error) {
       console.error('Error en disconnectWhatsApp:', error);
-      return { success: true, message: 'Sesión reiniciada con éxito' };
+      return { success: false, message: 'Error al cerrar sesión' };
     }
   }
 
