@@ -89,7 +89,7 @@ export class WhatsappService implements OnModuleInit {
           }
         }
 
-       if (connection === 'open') {
+        if (connection === 'open') {
           console.log(`[Teléfono ${whatsappPhone}] ¡WhatsApp conectado y listo con Baileys!`);
           this.latestQrs.delete(whatsappPhone);
           this.initializing.delete(whatsappPhone);
@@ -109,13 +109,11 @@ export class WhatsappService implements OnModuleInit {
           this.latestQrs.delete(whatsappPhone);
           this.initializing.delete(whatsappPhone);
 
-          // Si el usuario cerró sesión explícitamente desde su app de WhatsApp Business, borramos credenciales
           if (statusCode === DisconnectReason.loggedOut) {
             if (fs.existsSync(authFolder)) {
               fs.rmSync(authFolder, { recursive: true, force: true });
             }
           } else if (shouldReconnect) {
-            // Esperamos 3 segundos antes de reintentar la conexión para evitar saturar el socket
             setTimeout(() => {
               this.initWhatsAppClient(whatsappPhone);
             }, 3000);
@@ -318,12 +316,62 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-    const allProducts = await this.productRepository.find({
+      // 💡 5. PRIORIDAD: EVALUAR PRIMERO LAS PALABRAS CLAVE CONFIGURADAS
+      const keywords = await this.keywordRepository.find({
+        where: { whatsapp_phone: whatsappPhone, is_active: true }
+      });
+      let matchedRule: BotKeyword | null = null;
+
+      for (const rule of keywords) {
+        const kw = normalizeStr(rule.keyword);
+        if (rule.match_type === 'exact' && cleanIncomingText === kw) {
+          matchedRule = rule;
+          break;
+        } else if (rule.match_type === 'contains' && cleanIncomingText.includes(kw)) {
+          matchedRule = rule;
+          break;
+        }
+      }
+
+      if (matchedRule) {
+        const allProductsCount = await this.productRepository.count({ where: { whatsapp_phone: whatsappPhone, status: true } });
+
+        if (matchedRule.response_type === 'text') {
+          botResponseText = matchedRule.reply_text;
+          await sock.sendMessage(senderNumber, { text: botResponseText });
+        } else if (matchedRule.response_type === 'quote') {
+          botResponseText = `¡Con mucho gusto te ayudamos con tu cotización! 📝\n\nPara empezar, por favor dinos: *¿Cuál es tu nombre?*`;
+          await sock.sendMessage(senderNumber, { text: botResponseText });
+
+          await this.quoteRepository.save({
+            whatsapp_phone: whatsappPhone,
+            client_phone: senderNumber,
+            client_name: '',
+            products_requested: 'Esperando detalle de productos...',
+            total_estimated: 0.00,
+            status: 'Esperando Nombre'
+          });
+        } else if (matchedRule.response_type === 'product_search') {
+          botResponseText = `📦 ¡Hola! Actualmente contamos con un total de *${allProductsCount} productos* registrados.\n\nEscribe el nombre de lo que buscas (ej. *palas*, *tornillos*...) o escribe *VER TODOS*.`;
+          await sock.sendMessage(senderNumber, { text: botResponseText });
+        }
+
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: botResponseText,
+          whatsapp_phone: whatsappPhone,
+        });
+        return;
+      }
+
+      // 6. CARGAR PRODUCTOS PARA BÚSQUEDA SECUNDARIA
+      const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
         order: { name: 'ASC' }
       });
 
-      // 5. BÚSQUEDA EXACTA DE PRODUCTO
+      // 6.1. BÚSQUEDA EXACTA DE PRODUCTO
       const matchedProduct = allProducts.find(p => normalizeStr(p.name) === cleanIncomingText);
 
       if (matchedProduct) {
@@ -333,7 +381,6 @@ export class WhatsappService implements OnModuleInit {
           `\nStock: ${matchedProduct.stock} ${matchedProduct.unit || 'pza'}` +
           (matchedProduct.description ? `\n${matchedProduct.description}` : '');
 
-        // Si el producto tiene imagen registrada, enviamos la imagen junto con la información
         if (matchedProduct.image_url && matchedProduct.image_url.startsWith('http')) {
           await sock.sendMessage(senderNumber, { 
             image: { url: matchedProduct.image_url }, 
@@ -345,7 +392,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 5.5. BÚSQUEDA INTELIGENTE POR CATEGORÍA O TÉRMINO PARCIAL (Ej. "palas", "tornillos")
+      // 6.2. BÚSQUEDA INTELIGENTE POR CATEGORÍA O TÉRMINO PARCIAL
       const matchedByCategoryOrPartial = allProducts.filter(p => 
         (p.category && normalizeStr(p.category).includes(cleanIncomingText)) ||
         (p.name && normalizeStr(p.name).includes(cleanIncomingText))
@@ -366,7 +413,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 6. CATÁLOGO INTERACTIVO
+      // 6.3. CATÁLOGO INTERACTIVO (VER TODOS O LETRAS)
       if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
         let selectedProducts = allProducts;
 
@@ -397,48 +444,9 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 7. PALABRAS CLAVE
-      const keywords = await this.keywordRepository.find({
-        where: { whatsapp_phone: whatsappPhone, is_active: true }
-      });
-      let matchedRule: BotKeyword | null = null;
-
-      for (const rule of keywords) {
-        const kw = normalizeStr(rule.keyword);
-        if (rule.match_type === 'exact' && cleanIncomingText === kw) {
-          matchedRule = rule;
-          break;
-        } else if (rule.match_type === 'contains' && cleanIncomingText.includes(kw)) {
-          matchedRule = rule;
-          break;
-        }
-      }
-
-      if (matchedRule) {
-        if (matchedRule.response_type === 'text') {
-          botResponseText = matchedRule.reply_text;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
-        } else if (matchedRule.response_type === 'quote') {
-          botResponseText = `¡Con mucho gusto te ayudamos con tu cotización! 📝\n\nPara empezar, por favor dinos: *¿Cuál es tu nombre?*`;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
-
-          await this.quoteRepository.save({
-            whatsapp_phone: whatsappPhone,
-            client_phone: senderNumber,
-            client_name: '',
-            products_requested: 'Esperando detalle de productos...',
-            total_estimated: 0.00,
-            status: 'Esperando Nombre'
-          });
-        } else if (matchedRule.response_type === 'product_search') {
-          const totalProductsCount = allProducts.length;
-          botResponseText = `📦 ¡Hola! Actualmente contamos con un total de *${totalProductsCount} productos* registrados.\n\nEscribe *VER TODOS* o una letra (ej. *A*, *B*...) para filtrar el catálogo.`;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
-        }
-      } else {
-        botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje.';
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-      }
+      // 7. FALLBACK GENERAL SI NINGUNA CONDICIÓN COINCIDE
+      botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje.';
+      await sock.sendMessage(senderNumber, { text: botResponseText });
 
       await this.chatLogRepository.save({
         phone_number: senderNumber,
