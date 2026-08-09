@@ -181,14 +181,12 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 0. COMANDO PARA TERMINAR SESIÓN / CERRAR CHAT MANUALMENTE (PRIMERÍSIMO)
+      // 0. COMANDO PARA TERMINAR SESIÓN / CERRAR CHAT MANUALMENTE
       // =========================================================================
       const endSessionTriggers = ['salir', 'terminar', 'adios', 'adiós', 'finalizar', 'gracias'];
       
-      // Si está cotizando y escribe finalizar, lo procesamos directo en la sección de cotización.
-      // Si escribe salir/terminar en otro momento, cerramos sesión:
       if (endSessionTriggers.some(trigger => cleanIncomingText === trigger)) {
-        // Verificamos si tiene una cotización activa y quiere finalizarla
+        // Verificar si tiene una cotización activa y quiere finalizarla
         let activeQuoteCheck = await this.quoteRepository.findOne({
           where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
         });
@@ -203,14 +201,11 @@ export class WhatsappService implements OnModuleInit {
           activeQuoteCheck.status = 'Pendiente';
           await this.quoteRepository.save(activeQuoteCheck);
 
-          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteProductsGet(activeQuoteCheck)}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
-          // Nota: usa activeQuoteCheck.products_requested directamente abajo en tu código
           botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteCheck.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
 
-        // Si es cierre de sesión normal
         botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo*.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
@@ -232,7 +227,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 1. REVISAR SI EXISTE UN FLUJO DE COTIZACIÓN ACTIVO (BARRERA INQUEBRANTABLE)
+      // 1. FLUJO DE COTIZACIÓN ACTIVO (BARRERA ABSOLUTA E INQUEBRANTABLE)
       // =========================================================================
       
       let pendingQuoteName = await this.quoteRepository.findOne({
@@ -246,7 +241,7 @@ export class WhatsappService implements OnModuleInit {
 
         botResponseText = `¡Gracias, ${incomingText}! Ahora, por favor indícanos tu *número telefónico de contacto*:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
+        return; // 👈 Frena por completo el servicio aquí
       }
 
       let pendingQuotePhone = await this.quoteRepository.findOne({
@@ -261,7 +256,7 @@ export class WhatsappService implements OnModuleInit {
 
         botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 piezas de armella* o usa el número de nuestro *Catálogo*).\n\nCuando termines de agregar tus productos, escribe *Finalizar* para guardar tu cotización.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
+        return; // 👈 Frena por completo el servicio aquí
       }
 
       let activeQuoteProducts = await this.quoteRepository.findOne({
@@ -269,7 +264,6 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (activeQuoteProducts) {
-        // Si escribe finalizar
         if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
           if (!activeQuoteProducts.products_requested || activeQuoteProducts.products_requested.trim() === '') {
             botResponseText = `⚠️ Aún no has agregado ningún producto. Escribe qué producto necesitas o escribe *Cancelar*.`;
@@ -282,21 +276,21 @@ export class WhatsappService implements OnModuleInit {
 
           botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteProducts.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
-          return;
+          return; // 👈 Frena por completo el servicio aquí
         }
 
-        // 🛑 AQUÍ ESTÁ EL FIX: Cualquier texto que mande el cliente mientras está cotizando SE ACUMULA y SE RETORNA. NUNCA CAE EN FALLBACK.
+        // 🛑 ACUMULACIÓN SILENCIOSA DE PRODUCTOS: Cero fallbacks, cero comandos ejecutados
         const currentProducts = activeQuoteProducts.products_requested ? activeQuoteProducts.products_requested + '\n• ' : '• ';
         activeQuoteProducts.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuoteProducts);
 
         botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return; 
+        return; // 👈 RETORNO ESTRICTO: Impide que el mensaje caiga en el fallback
       }
 
       // =========================================================================
-      // 2. REVISAR SI EXISTE UN FLUJO DE LEAD / ASESOR ACTIVO (BARRERA INQUEBRANTABLE)
+      // 2. FLUJO DE LEAD / ASESOR ACTIVO (BARRERA ABSOLUTA E INQUEBRANTABLE)
       // =========================================================================
       let lead = await this.leadRepository.findOne({
         where: { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
@@ -319,7 +313,7 @@ export class WhatsappService implements OnModuleInit {
 
         botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
+        return; // 👈 Frena por completo
       }
 
       if (lead && lead.conversation_state === 'collecting_phone') {
@@ -329,17 +323,17 @@ export class WhatsappService implements OnModuleInit {
 
         botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
+        return; // 👈 Frena por completo
       }
 
       if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText; // 👈 🛑 AQUÍ ESTÁ EL FIX: Guarda la empresa de forma limpia y frena el flujo para que no caiga en fallback
+        lead.company_name = incomingText; // 👈 Guarda el nombre de la empresa limpio y seguro
         lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
         botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
+        return; // 👈 RETORNO ESTRICTO: Impide que caiga en fallback al recibir el nombre de la empresa
       }
 
       // =========================================================================
