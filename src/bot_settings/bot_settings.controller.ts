@@ -5,7 +5,13 @@ import { UpdateBotSettingDto } from './dto/update-bot_setting.dto';
 
 @Controller('bot-settings')
 export class BotSettingsController {
-  constructor(private readonly botSettingsService: BotSettingsService) {}
+  constructor(private readonly botSettingsService: BotSettingsService) { }
+
+  // 1. Ruta fija PRIMERO para evitar conflictos con parámetros
+  @Post('load')
+  async getSettingsByPhone(@Body() body: { whatsappPhone: string }) {
+    return await this.botSettingsService.findOneByPhone(body.whatsappPhone);
+  }
 
   // Crear configuración inicial vinculada al teléfono
   @Post(':whatsappPhone')

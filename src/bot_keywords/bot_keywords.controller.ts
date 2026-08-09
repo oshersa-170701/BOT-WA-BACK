@@ -5,7 +5,13 @@ import { UpdateBotKeywordDto } from './dto/update-bot_keyword.dto';
 
 @Controller('bot-keywords')
 export class BotKeywordsController {
-  constructor(private readonly botKeywordsService: BotKeywordsService) {}
+  constructor(private readonly botKeywordsService: BotKeywordsService) { }
+
+  // 1. Ruta fija PRIMERO
+  @Post('list')
+  async getKeywordsByPhone(@Body() body: { whatsappPhone: string }) {
+    return await this.botKeywordsService.findAllByPhone(body.whatsappPhone);
+  }
 
   // Crear palabra clave vinculada al teléfono del usuario
   @Post(':whatsappPhone')

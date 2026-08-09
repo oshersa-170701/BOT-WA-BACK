@@ -1,21 +1,22 @@
-import { Controller, Get, Param, Post } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 
 @Controller('whatsapp')
 export class WhatsappController {
   constructor(private readonly whatsappService: WhatsappService) { }
 
-  @Get('qr/:whatsappPhone')
-  async getQrCode(@Param('whatsappPhone') whatsappPhone: string) {
-    return await this.whatsappService.getQrCode(whatsappPhone);
+  @Post('qr')
+  async getQrCode(@Body() body: { whatsappPhone: string }) {
+    return await this.whatsappService.getQrCode(body.whatsappPhone);
   }
 
-  @Post('disconnect/:whatsappPhone')
-  async disconnectWhatsApp(@Param('whatsappPhone') whatsappPhone: string) {
-    return await this.whatsappService.disconnectWhatsApp(whatsappPhone);
+  @Post('disconnect')
+  async disconnectWhatsApp(@Body() body: { whatsappPhone: string }) {
+    return await this.whatsappService.disconnectWhatsApp(body.whatsappPhone);
   }
-  @Get('status/:phone')
-  async getStatus(@Param('phone') phone: string) {
-    return await this.whatsappService.checkConnectionStatus(phone);
+
+  @Post('status')
+  async getStatus(@Body() body: { whatsappPhone: string }) {
+    return await this.whatsappService.checkConnectionStatus(body.whatsappPhone);
   }
 }
