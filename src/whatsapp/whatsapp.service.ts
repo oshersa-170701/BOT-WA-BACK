@@ -167,7 +167,8 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      const senderNumber = msg.key.remoteJid;
+      const senderNumberFull = msg.key.remoteJid; // ej: 5219514446677@s.whatsapp.net
+      const cleanSenderPhone = senderNumberFull ? senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '') : '';
       const messageContent = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       const incomingText = messageContent.trim();
       if (!incomingText) return;
@@ -178,9 +179,12 @@ export class WhatsappService implements OnModuleInit {
 
       const cleanIncomingText = normalizeStr(incomingText);
 
-      // 1. Verificar si el chat ya fue asignado a un asesor humano o finalizado
+      // 1. Verificar si el chat ya fue asignado a un asesor humano o finalizado (buscando flexiblemente)
       let lead = await this.leadRepository.findOne({
-        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
+        ]
       });
 
       if (lead && lead.conversation_state === 'assigned_to_human') {
@@ -196,12 +200,31 @@ export class WhatsappService implements OnModuleInit {
       // 2. COMANDO PARA TERMINAR SESIÓN / CERRAR CHAT MANUALMENTE
       const endSessionTriggers = ['salir', 'terminar', 'adios', 'adiós', 'finalizar', 'gracias'];
       if (endSessionTriggers.some(trigger => cleanIncomingText === trigger)) {
-        botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo* en cualquier momento para iniciar de nuevo.`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        // Verificamos si estamos en medio de una cotización para cerrarla primero antes de salir por completo
+        let activeQuoteCheck = await this.quoteRepository.findOne({
+          where: [
+            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' },
+            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
+          ]
+        });
+
+        if (activeQuoteCheck && (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar')) {
+          if (activeQuoteCheck.products_requested && activeQuoteCheck.products_requested.trim() !== '') {
+            activeQuoteCheck.status = 'Pendiente';
+            await this.quoteRepository.save(activeQuoteCheck);
+
+            botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen:*\n${activeQuoteCheck.products_requested}\n\nUn asesor te contactará en breve. ¡Gracias!`;
+            await sock.sendMessage(senderNumberFull, { text: botResponseText });
+            return;
+          }
+        }
+
+        botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo*.`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
         if (!lead) {
           lead = this.leadRepository.create({
-            client_phone: senderNumber,
+            client_phone: cleanSenderPhone,
             whatsapp_phone: whatsappPhone,
             conversation_state: 'assigned_to_human'
           });
@@ -219,7 +242,7 @@ export class WhatsappService implements OnModuleInit {
         await this.leadRepository.save(lead);
 
         botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
@@ -229,7 +252,7 @@ export class WhatsappService implements OnModuleInit {
         await this.leadRepository.save(lead);
 
         botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
@@ -238,14 +261,17 @@ export class WhatsappService implements OnModuleInit {
         lead.conversation_state = 'assigned_to_human';
         await this.leadRepository.save(lead);
 
-        botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor, asociado o proveedor se comunicará contigo para continuar la conversación. ¡Gracias por tu paciencia!`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
-      // 4. FLUJO DE COTIZACIÓN PASO A PASO (INTERACTIVO Y ACUMULATIVO)
+      // 4. FLUJO DE COTIZACIÓN PASO A PASO (CON BÚSQUEDA FLEXIBLE)
       let pendingQuote = await this.quoteRepository.findOne({
-        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
+        ]
       });
 
       if (pendingQuote) {
@@ -254,12 +280,15 @@ export class WhatsappService implements OnModuleInit {
         await this.quoteRepository.save(pendingQuote);
 
         botResponseText = `¡Gracias, ${incomingText}! Ahora, por favor indícanos tu *número telefónico de contacto*:`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
       let phoneQuote = await this.quoteRepository.findOne({
-        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
+        ]
       });
 
       if (phoneQuote) {
@@ -268,20 +297,23 @@ export class WhatsappService implements OnModuleInit {
         phoneQuote.products_requested = '';
         await this.quoteRepository.save(phoneQuote);
 
-        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 sacos de cemento*).\n\nCuando termines de agregar tus productos, escribe *Finalizar* para guardar tu cotización.`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar (ej. *10 piezas de armella* o usa el número de nuestro *Catálogo*).\n\nCuando termines, escribe *Finalizar* para guardar tu cotización.`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
       let activeQuote = await this.quoteRepository.findOne({
-        where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
+        ]
       });
 
       if (activeQuote) {
         if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
           if (!activeQuote.products_requested || activeQuote.products_requested.trim() === '') {
-            botResponseText = `⚠️ Aún no has agregado ningún producto. Por favor escribe qué producto necesitas o escribe *Cancelar*.`;
-            await sock.sendMessage(senderNumber, { text: botResponseText });
+            botResponseText = `⚠️ Aún no has agregado ningún producto. Escribe qué producto necesitas o escribe *Cancelar*.`;
+            await sock.sendMessage(senderNumberFull, { text: botResponseText });
             return;
           }
 
@@ -289,7 +321,7 @@ export class WhatsappService implements OnModuleInit {
           await this.quoteRepository.save(activeQuote);
 
           botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuote.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
 
@@ -297,19 +329,22 @@ export class WhatsappService implements OnModuleInit {
         activeQuote.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuote);
 
-        botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        botResponseText = `🛒 Producto agregado correctamente.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
       // 5. BIENVENIDA O SALUDO INICIAL
       const previousChatsCount = await this.chatLogRepository.count({
-        where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
+        where: [
+          { phone_number: senderNumberFull, whatsapp_phone: whatsappPhone },
+          { phone_number: cleanSenderPhone, whatsapp_phone: whatsappPhone }
+        ]
       });
 
       if (previousChatsCount === 0 || cleanIncomingText === 'hola') {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
         if (lead) {
           lead.conversation_state = 'active';
@@ -317,7 +352,7 @@ export class WhatsappService implements OnModuleInit {
         }
 
         await this.chatLogRepository.save({
-          phone_number: senderNumber,
+          phone_number: cleanSenderPhone,
           incoming_message: incomingText,
           bot_response: botResponseText,
           whatsapp_phone: whatsappPhone,
@@ -329,12 +364,15 @@ export class WhatsappService implements OnModuleInit {
       const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
       if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
         let existingLead = await this.leadRepository.findOne({
-          where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
+          where: [
+            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
+            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
+          ]
         });
 
         if (!existingLead) {
           existingLead = this.leadRepository.create({
-            client_phone: senderNumber,
+            client_phone: cleanSenderPhone,
             whatsapp_phone: whatsappPhone,
             conversation_state: 'collecting_name'
           });
@@ -344,7 +382,7 @@ export class WhatsappService implements OnModuleInit {
         await this.leadRepository.save(existingLead);
 
         botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
@@ -368,27 +406,27 @@ export class WhatsappService implements OnModuleInit {
       if (matchedRule) {
         if (matchedRule.response_type === 'text') {
           botResponseText = matchedRule.reply_text;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
         } else if (matchedRule.response_type === 'quote') {
           botResponseText = `¡Con mucho gusto te ayudamos con tu cotización! 📝\n\nPara empezar, por favor dinos: *¿Cuál es tu nombre?*`;
-          await sock.sendMessage(senderNumber, { text: botResponseText });
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
           await this.quoteRepository.save({
             whatsapp_phone: whatsappPhone,
-            client_phone: senderNumber,
+            client_phone: cleanSenderPhone,
             client_name: '',
             products_requested: '',
             total_estimated: 0.00,
             status: 'Esperando Nombre'
           });
         } else if (matchedRule.response_type === 'product_search') {
-          this.catalogPages.set(senderNumber, 0);
-          await this.sendCatalogPage(whatsappPhone, senderNumber, sock, 0);
+          this.catalogPages.set(cleanSenderPhone, 0);
+          await this.sendCatalogPage(whatsappPhone, senderNumberFull, sock, 0);
           return;
         }
 
         await this.chatLogRepository.save({
-          phone_number: senderNumber,
+          phone_number: cleanSenderPhone,
           incoming_message: incomingText,
           bot_response: botResponseText,
           whatsapp_phone: whatsappPhone,
@@ -404,7 +442,7 @@ export class WhatsappService implements OnModuleInit {
 
       // 8.0. COMANDO "SIGUIENTE" O "MÁS"
       if (cleanIncomingText === 'siguiente' || cleanIncomingText === 'mas' || cleanIncomingText === 'más') {
-        let currentPage = this.catalogPages.get(senderNumber) || 0;
+        let currentPage = this.catalogPages.get(cleanSenderPhone) || 0;
         currentPage++;
 
         const maxPages = Math.ceil(allProducts.length / 12);
@@ -412,8 +450,8 @@ export class WhatsappService implements OnModuleInit {
           currentPage = 0;
         }
 
-        this.catalogPages.set(senderNumber, currentPage);
-        await this.sendCatalogPage(whatsappPhone, senderNumber, sock, currentPage);
+        this.catalogPages.set(cleanSenderPhone, currentPage);
+        await this.sendCatalogPage(whatsappPhone, senderNumberFull, sock, currentPage);
         return;
       }
 
@@ -422,7 +460,7 @@ export class WhatsappService implements OnModuleInit {
 
       if (/^\d+$/.test(cleanIncomingText)) {
         const index = parseInt(cleanIncomingText, 10) - 1;
-        const currentPage = this.catalogPages.get(senderNumber) || 0;
+        const currentPage = this.catalogPages.get(cleanSenderPhone) || 0;
         const pagedProducts = allProducts.slice(currentPage * 12, (currentPage + 1) * 12);
         if (index >= 0 && index < pagedProducts.length) {
           matchedProduct = pagedProducts[index];
@@ -439,12 +477,12 @@ export class WhatsappService implements OnModuleInit {
           (matchedProduct.description ? `\n${matchedProduct.description}` : '');
 
         if (matchedProduct.image_url && matchedProduct.image_url.startsWith('http')) {
-          await sock.sendMessage(senderNumber, {
+          await sock.sendMessage(senderNumberFull, {
             image: { url: matchedProduct.image_url },
             caption: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*`
           });
         } else {
-          await sock.sendMessage(senderNumber, { text: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*` });
+          await sock.sendMessage(senderNumberFull, { text: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*` });
         }
         return;
       }
@@ -462,23 +500,23 @@ export class WhatsappService implements OnModuleInit {
           categoryResultsText += `\n${idx + 1}. ${prod.name} ($${prod.price})`;
         });
 
-        await sock.sendMessage(senderNumber, { text: categoryResultsText });
+        await sock.sendMessage(senderNumberFull, { text: categoryResultsText });
         return;
       }
 
       // 8.3. COMANDO "VER TODOS"
       if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
-        this.catalogPages.set(senderNumber, 0);
-        await this.sendCatalogPage(whatsappPhone, senderNumber, sock, 0);
+        this.catalogPages.set(cleanSenderPhone, 0);
+        await this.sendCatalogPage(whatsappPhone, senderNumberFull, sock, 0);
         return;
       }
 
       // 9. FALLBACK GENERAL
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
-      await sock.sendMessage(senderNumber, { text: botResponseText });
+      await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
       await this.chatLogRepository.save({
-        phone_number: senderNumber,
+        phone_number: cleanSenderPhone,
         incoming_message: incomingText,
         bot_response: botResponseText,
         whatsapp_phone: whatsappPhone,
