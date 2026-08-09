@@ -139,7 +139,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
+private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
@@ -183,37 +183,14 @@ export class WhatsappService implements OnModuleInit {
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
       });
 
-      // 2. LEAD: Recopilar Nombre
-      if (lead && lead.conversation_state === 'collecting_name') {
-        lead.client_name = incomingText;
-        lead.conversation_state = 'collecting_phone'; // 👈 Pasamos a pedir el teléfono de contacto
-        await this.leadRepository.save(lead);
-
-        botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-        return;
-      }
-
-      // 2.5. LEAD: Recopilar Teléfono
-      if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText; // 👈 Guardamos el teléfono que escribió
-        lead.conversation_state = 'collecting_company'; // 👈 Pasamos al siguiente paso para pedir la empresa
-        await this.leadRepository.save(lead);
-
-        botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-        return;
-      }
-
-      // 3. LEAD: Recopilar Empresa y TERMINAR CHAT PARA DAR PASO AL ASESOR
-      if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText; // 👈 Guardamos correctamente el nombre de la empresa/negocio
-        lead.conversation_state = 'assigned_to_human'; // 👈 El bot termina el chat y cede el control al asesor
-        await this.leadRepository.save(lead);
-
-        botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor, asociado o proveedor se comunicará contigo para continuar la conversación. ¡Gracias por tu paciencia!`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-        return;
+      if (lead && lead.conversation_state === 'assigned_to_human') {
+        const reactivationTriggers = ['hola', 'catálogo', 'catalogo', 'bot', 'menu', 'menú'];
+        if (reactivationTriggers.some(t => cleanIncomingText.includes(t))) {
+          lead.conversation_state = 'active';
+          await this.leadRepository.save(lead);
+        } else {
+          return;
+        }
       }
 
       // 2. COMANDO PARA TERMINAR SESIÓN / CERRAR CHAT MANUALMENTE
@@ -222,7 +199,6 @@ export class WhatsappService implements OnModuleInit {
         botResponseText = `👋 Sesión finalizada. Gracias por comunicarte con nosotros. Si necesitas algo más, solo escribe *Hola* o *Catálogo* en cualquier momento para iniciar de nuevo.`;
         await sock.sendMessage(senderNumber, { text: botResponseText });
 
-        // Marcamos como asignado a humano/finalizado para silenciar al bot hasta que vuelva a saludar
         if (!lead) {
           lead = this.leadRepository.create({
             client_phone: senderNumber,
@@ -236,30 +212,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 0. VERIFICAR SI ES EL PRIMER MENSAJE (BIENVENIDA AUTOMÁTICA)
-      const previousChatsCount = await this.chatLogRepository.count({
-        where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
-      });
-
-      if (previousChatsCount === 0 || cleanIncomingText === 'hola') {
-        botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-
-        if (lead) {
-          lead.conversation_state = 'active';
-          await this.leadRepository.save(lead);
-        }
-
-        await this.chatLogRepository.save({
-          phone_number: senderNumber,
-          incoming_message: incomingText,
-          bot_response: botResponseText,
-          whatsapp_phone: whatsappPhone,
-        });
-        return;
-      }
-
-      // 2. LEAD: Recopilar Nombre
+      // 3. FLUJO DE LEADS (ASESOR) PASO A PASO (¡DEBE IR PRIMERO PARA CAPTURAR LA EMPRESA SIN INTERRUPCIONES!)
       if (lead && lead.conversation_state === 'collecting_name') {
         lead.client_name = incomingText;
         lead.conversation_state = 'collecting_phone';
@@ -270,7 +223,6 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 2.5. LEAD: Recopilar Teléfono
       if (lead && lead.conversation_state === 'collecting_phone') {
         lead.client_phone = incomingText;
         lead.conversation_state = 'collecting_company';
@@ -281,9 +233,8 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 3. LEAD: Recopilar Empresa y TERMINAR CHAT PARA DAR PASO AL ASESOR
       if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText;
+        lead.company_name = incomingText; // 👈 Guarda correctamente el negocio o empresa
         lead.conversation_state = 'assigned_to_human'; // 👈 El bot termina el chat y cede el control al asesor
         await this.leadRepository.save(lead);
 
@@ -292,30 +243,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 3.5. Detección automática de ASESOR / ASOCIADO
-      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
-      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
-        let existingLead = await this.leadRepository.findOne({
-          where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
-        });
-
-        if (!existingLead) {
-          existingLead = this.leadRepository.create({
-            client_phone: senderNumber,
-            whatsapp_phone: whatsappPhone,
-            conversation_state: 'collecting_name'
-          });
-        } else {
-          existingLead.conversation_state = 'collecting_name';
-        }
-        await this.leadRepository.save(existingLead);
-
-        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
-        await sock.sendMessage(senderNumber, { text: botResponseText });
-        return;
-      }
-
-      // 4. COTIZACIÓN: Flujo paso a paso
+      // 4. FLUJO DE COTIZACIÓN PASO A PASO (¡DEBE IR ANTES DE LAS PALABRAS CLAVE!)
       let pendingQuote = await this.quoteRepository.findOne({
         where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
       });
@@ -359,7 +287,53 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 5. EVALUAR PALABRAS CLAVE CONFIGURADAS
+      // 5. BIENVENIDA O SALUDO INICIAL
+      const previousChatsCount = await this.chatLogRepository.count({
+        where: { phone_number: senderNumber, whatsapp_phone: whatsappPhone }
+      });
+
+      if (previousChatsCount === 0 || cleanIncomingText === 'hola') {
+        botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
+        await sock.sendMessage(senderNumber, { text: botResponseText });
+
+        if (lead) {
+          lead.conversation_state = 'active';
+          await this.leadRepository.save(lead);
+        }
+
+        await this.chatLogRepository.save({
+          phone_number: senderNumber,
+          incoming_message: incomingText,
+          bot_response: botResponseText,
+          whatsapp_phone: whatsappPhone,
+        });
+        return;
+      }
+
+      // 6. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
+      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
+      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
+        let existingLead = await this.leadRepository.findOne({
+          where: { client_phone: senderNumber, whatsapp_phone: whatsappPhone }
+        });
+
+        if (!existingLead) {
+          existingLead = this.leadRepository.create({
+            client_phone: senderNumber,
+            whatsapp_phone: whatsappPhone,
+            conversation_state: 'collecting_name'
+          });
+        } else {
+          existingLead.conversation_state = 'collecting_name';
+        }
+        await this.leadRepository.save(existingLead);
+
+        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
+        await sock.sendMessage(senderNumber, { text: botResponseText });
+        return;
+      }
+
+      // 7. EVALUAR PALABRAS CLAVE CONFIGURADAS
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
       });
@@ -407,13 +381,13 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 6. CARGAR PRODUCTOS PARA BÚSQUEDA SECUNDARIA
+      // 8. CARGAR PRODUCTOS PARA BÚSQUEDA Y CATÁLOGO
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
         order: { name: 'ASC' }
       });
 
-      // 6.0. COMANDO "SIGUIENTE" O "MÁS" EN CATÁLOGO
+      // 8.0. COMANDO "SIGUIENTE" O "MÁS"
       if (cleanIncomingText === 'siguiente' || cleanIncomingText === 'mas' || cleanIncomingText === 'más') {
         let currentPage = this.catalogPages.get(senderNumber) || 0;
         currentPage++;
@@ -428,7 +402,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 6.1. BÚSQUEDA EXACTA O POR NÚMERO DE LISTA
+      // 8.1. BÚSQUEDA EXACTA O POR NÚMERO DE LISTA
       let matchedProduct: Product | undefined = undefined;
 
       if (/^\d+$/.test(cleanIncomingText)) {
@@ -452,15 +426,15 @@ export class WhatsappService implements OnModuleInit {
         if (matchedProduct.image_url && matchedProduct.image_url.startsWith('http')) {
           await sock.sendMessage(senderNumber, { 
             image: { url: matchedProduct.image_url }, 
-            caption: details + `\n\n*(Escribe "Siguiente" para ver más catálogo o "Terminar" para cerrar chat)*`
+            caption: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*`
           });
         } else {
-          await sock.sendMessage(senderNumber, { text: details + `\n\n*(Escribe "Siguiente" para ver más catálogo o "Terminar" para cerrar chat)*` });
+          await sock.sendMessage(senderNumber, { text: details + `\n\n*(Escribe "Siguiente" para ver más o "Terminar" para cerrar chat)*` });
         }
         return;
       }
 
-      // 6.2. BÚSQUEDA POR CATEGORÍA O PARCIAL
+      // 8.2. BÚSQUEDA POR CATEGORÍA O PARCIAL
       const matchedByCategoryOrPartial = allProducts.filter(p => 
         (p.category && normalizeStr(p.category).includes(cleanIncomingText)) ||
         (p.name && normalizeStr(p.name).includes(cleanIncomingText))
@@ -477,14 +451,14 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // 6.3. COMANDO "VER TODOS"
+      // 8.3. COMANDO "VER TODOS"
       if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
         this.catalogPages.set(senderNumber, 0);
         await this.sendCatalogPage(whatsappPhone, senderNumber, sock, 0);
         return;
       }
 
-      // 7. FALLBACK
+      // 9. FALLBACK GENERAL
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
       await sock.sendMessage(senderNumber, { text: botResponseText });
 
@@ -499,7 +473,6 @@ export class WhatsappService implements OnModuleInit {
       console.error('Error procesando mensaje con Baileys:', error);
     }
   }
-
   private async sendCatalogPage(whatsappPhone: string, senderNumber: string, sock: any, page: number) {
     const allProducts = await this.productRepository.find({
       where: { whatsapp_phone: whatsappPhone, status: true },
