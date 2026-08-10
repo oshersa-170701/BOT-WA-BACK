@@ -312,7 +312,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 4. BIENVENIDA O SALUDO INICIAL (DETECTA PRIMERA VEZ O SALUDOS)
+      // 4. BIENVENIDA O SALUDO INICIAL (SOLO PARA PRIMERA VEZ O "HOLA" ESTRICTO)
       // =========================================================================
       const previousChatsCount = await this.chatLogRepository.count({
         where: [
@@ -321,8 +321,9 @@ export class WhatsappService implements OnModuleInit {
         ]
       });
 
-      const welcomeTriggers = ['hola', 'informacion', 'catalogo', 'buenos', 'buenas', 'cotizacion', 'asesor', 'ayuda'];
-      const isWelcomeMessage = previousChatsCount === 0 || welcomeTriggers.some(t => cleanIncomingText.includes(t));
+      // 💡 CORRECCIÓN: La bienvenida solo salta si es cero chats previos o si dice estrictamente "hola". 
+      // Las palabras como "catalogo", "cotizacion" o "asesor" pasan de largo a sus módulos respectivos.
+      const isWelcomeMessage = previousChatsCount === 0 || cleanIncomingText === 'hola';
 
       if (isWelcomeMessage) {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
