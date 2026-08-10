@@ -123,8 +123,6 @@ export class WhatsappService implements OnModuleInit {
         if (type !== 'notify') return;
         const msg = messages[0];
         
-        console.log('[DEBUG Baileys] Mensaje entrante crudo:', JSON.stringify(msg?.key, null, 2));
-
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
@@ -144,14 +142,11 @@ export class WhatsappService implements OnModuleInit {
 
   private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
-      console.log(`[DEBUG Bot ${whatsappPhone}] Procesando mensaje entrante...`);
-
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
       });
 
       if (settings && settings.is_bot_active === false) {
-        console.log('[DEBUG Bot] El bot está desactivado en la configuración.');
         return;
       }
 
@@ -167,12 +162,7 @@ export class WhatsappService implements OnModuleInit {
         msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text || '';
 
       const incomingText = messageContent.trim();
-      console.log(`[DEBUG Bot] Texto extraído del mensaje: "${incomingText}" de ${cleanSenderPhone}`);
-      
-      if (!incomingText) {
-        console.log('[DEBUG Bot] El texto vino vacío, se ignora.');
-        return;
-      }
+      if (!incomingText) return;
 
       let botResponseText = '';
       const normalizeStr = (str: string) =>
@@ -322,12 +312,19 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 4. BIENVENIDA O SALUDO INICIAL (RESPUESTA GARANTIZADA AL SALUDAR)
+      // 4. BIENVENIDA O SALUDO INICIAL (DETECTA PRIMERA VEZ O SALUDOS)
       // =========================================================================
-      const welcomeTriggers = ['hola', 'informacion', 'catalogo', 'buenos', 'buenas', 'cotizacion', 'asesor', 'ayuda'];
-      const isWelcomeMessage = welcomeTriggers.some(t => cleanIncomingText.includes(t));
+      const previousChatsCount = await this.chatLogRepository.count({
+        where: [
+          { phone_number: senderNumberFull, whatsapp_phone: whatsappPhone },
+          { phone_number: cleanSenderPhone, whatsapp_phone: whatsappPhone }
+        ]
+      });
 
-      if (isWelcomeMessage || cleanIncomingText.length > 0) {
+      const welcomeTriggers = ['hola', 'informacion', 'catalogo', 'buenos', 'buenas', 'cotizacion', 'asesor', 'ayuda'];
+      const isWelcomeMessage = previousChatsCount === 0 || welcomeTriggers.some(t => cleanIncomingText.includes(t));
+
+      if (isWelcomeMessage) {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
@@ -346,7 +343,35 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 5. PALABRAS CLAVE CONFIGURADAS
+      // 5. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
+      // =========================================================================
+      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
+      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
+        let existingLead = await this.leadRepository.findOne({
+          where: [
+            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
+            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
+          ]
+        });
+
+        if (!existingLead) {
+          existingLead = this.leadRepository.create({
+            client_phone: cleanSenderPhone,
+            whatsapp_phone: whatsappPhone,
+            conversation_state: 'collecting_name'
+          });
+        } else {
+          existingLead.conversation_state = 'collecting_name';
+        }
+        await this.leadRepository.save(existingLead);
+
+        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      // =========================================================================
+      // 6. PALABRAS CLAVE CONFIGURADAS
       // =========================================================================
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
@@ -396,7 +421,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 6. CATÁLOGOS Y BÚSQUEDA DE PRODUCTOS
+      // 7. CATÁLOGOS Y BÚSQUEDA DE PRODUCTOS
       // =========================================================================
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
@@ -462,14 +487,14 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      if (cleanIncomingText === 'ver todos' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
+      if (cleanIncomingText === 'ver todos' || cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || (cleanIncomingText.length === 1 && /^[a-z]$/.test(cleanIncomingText))) {
         this.catalogPages.set(cleanSenderPhone, 0);
         await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
         return;
       }
 
       // =========================================================================
-      // 7. FALLBACK GENERAL (GARANTIZADO)
+      // 8. FALLBACK GENERAL
       // =========================================================================
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
       await sock.sendMessage(senderNumberFull, { text: botResponseText });
