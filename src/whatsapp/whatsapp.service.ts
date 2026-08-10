@@ -323,7 +323,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 4. BIENVENIDA O SALUDO INICIAL
+      // 4. BIENVENIDA O SALUDO INICIAL (FLEXIBLE PARA CUALQUIER MENSAJE PREDETERMINADO)
       // =========================================================================
       const previousChatsCount = await this.chatLogRepository.count({
         where: [
@@ -332,7 +332,10 @@ export class WhatsappService implements OnModuleInit {
         ]
       });
 
-      if (previousChatsCount === 0 || cleanIncomingText === 'hola') {
+      const welcomeTriggers = ['hola', 'informacion', 'catalogo', 'buenos', 'buenas', 'cotizacion', 'asesor', 'ayuda'];
+      const isWelcomeMessage = previousChatsCount === 0 || welcomeTriggers.some(t => cleanIncomingText.includes(t));
+
+      if (isWelcomeMessage) {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
