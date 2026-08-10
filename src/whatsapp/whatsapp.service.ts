@@ -167,10 +167,10 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-    const senderNumberFull = msg.key.remoteJid || '';
+      const senderNumberFull = msg.key.remoteJid || '';
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
       
-      // 💡 EXTRACTOR BLINDADO: Detecta texto de chats normales, enlaces wa.me, mensajes efímeros o multimedia
+      // 💡 EXTRACTOR BLINDADO UNIVERSAL (Captura enlaces wa.me, texto plano, mensajes extendidos o efímeros)
       const messageContent = 
         msg.message?.conversation || 
         msg.message?.extendedTextMessage?.text || 
