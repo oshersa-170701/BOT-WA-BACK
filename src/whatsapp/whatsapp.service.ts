@@ -122,6 +122,9 @@ export class WhatsappService implements OnModuleInit {
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
+        
+        console.log('[DEBUG Baileys] Mensaje entrante crudo:', JSON.stringify(msg?.key, null, 2));
+
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
@@ -141,36 +144,20 @@ export class WhatsappService implements OnModuleInit {
 
   private async handleIncomingMessage(whatsappPhone: string, msg: any, sock: any) {
     try {
+      console.log(`[DEBUG Bot ${whatsappPhone}] Procesando mensaje entrante...`);
+
       const settings = await this.settingRepository.findOne({
         where: { whatsapp_phone: whatsappPhone }
       });
 
       if (settings && settings.is_bot_active === false) {
+        console.log('[DEBUG Bot] El bot está desactivado en la configuración.');
         return;
-      }
-
-      if (settings) {
-        const now = new Date();
-        const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-        if (settings.start_time && settings.end_time) {
-          if (currentTime < settings.start_time || currentTime > settings.end_time) {
-            return;
-          }
-        }
-
-        if (settings.allowed_days && Array.isArray(settings.allowed_days) && settings.allowed_days.length > 0) {
-          const currentDay = now.getDay();
-          if (!settings.allowed_days.includes(currentDay)) {
-            return;
-          }
-        }
       }
 
       const senderNumberFull = msg.key.remoteJid || '';
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
       
-      // 💡 EXTRACTOR BLINDADO UNIVERSAL (Captura enlaces wa.me, texto plano, mensajes extendidos o efímeros)
       const messageContent = 
         msg.message?.conversation || 
         msg.message?.extendedTextMessage?.text || 
@@ -180,7 +167,12 @@ export class WhatsappService implements OnModuleInit {
         msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text || '';
 
       const incomingText = messageContent.trim();
-      if (!incomingText) return;
+      console.log(`[DEBUG Bot] Texto extraído del mensaje: "${incomingText}" de ${cleanSenderPhone}`);
+      
+      if (!incomingText) {
+        console.log('[DEBUG Bot] El texto vino vacío, se ignora.');
+        return;
+      }
 
       let botResponseText = '';
       const normalizeStr = (str: string) =>
@@ -191,7 +183,6 @@ export class WhatsappService implements OnModuleInit {
       // =========================================================================
       // 1. FLUJO DE COTIZACIÓN ACTIVO (BARRERA ABSOLUTA E INQUEBRANTABLE)
       // =========================================================================
-      
       let pendingQuoteName = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' },
@@ -254,13 +245,13 @@ export class WhatsappService implements OnModuleInit {
         activeQuoteProducts.products_requested = currentProducts + incomingText;
         await this.quoteRepository.save(activeQuoteProducts);
 
-        botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe **Finalizar** para concluir.`;
+        botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe *Finalizar* para concluir.`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
       // =========================================================================
-      // 2. FLUJO DE LEAD / ASESOR ACTIVO (BARRERA ABSOLUTA E INQUEBRANTABLE)
+      // 2. FLUJO DE LEAD / ASESOR ACTIVO
       // =========================================================================
       let lead = await this.leadRepository.findOne({
         where: [
@@ -331,19 +322,12 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 4. BIENVENIDA O SALUDO INICIAL (FLEXIBLE PARA CUALQUIER MENSAJE PREDETERMINADO)
+      // 4. BIENVENIDA O SALUDO INICIAL (RESPUESTA GARANTIZADA AL SALUDAR)
       // =========================================================================
-      const previousChatsCount = await this.chatLogRepository.count({
-        where: [
-          { phone_number: senderNumberFull, whatsapp_phone: whatsappPhone },
-          { phone_number: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-        ]
-      });
-
       const welcomeTriggers = ['hola', 'informacion', 'catalogo', 'buenos', 'buenas', 'cotizacion', 'asesor', 'ayuda'];
-      const isWelcomeMessage = previousChatsCount === 0 || welcomeTriggers.some(t => cleanIncomingText.includes(t));
+      const isWelcomeMessage = welcomeTriggers.some(t => cleanIncomingText.includes(t));
 
-      if (isWelcomeMessage) {
+      if (isWelcomeMessage || cleanIncomingText.length > 0) {
         botResponseText = settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.';
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
 
@@ -362,35 +346,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 5. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
-      // =========================================================================
-      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
-      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
-        let existingLead = await this.leadRepository.findOne({
-          where: [
-            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
-            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-          ]
-        });
-
-        if (!existingLead) {
-          existingLead = this.leadRepository.create({
-            client_phone: cleanSenderPhone,
-            whatsapp_phone: whatsappPhone,
-            conversation_state: 'collecting_name'
-          });
-        } else {
-          existingLead.conversation_state = 'collecting_name';
-        }
-        await this.leadRepository.save(existingLead);
-
-        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      // =========================================================================
-      // 6. PALABRAS CLAVE CONFIGURADAS
+      // 5. PALABRAS CLAVE CONFIGURADAS
       // =========================================================================
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
@@ -440,7 +396,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 7. CATÁLOGOS Y BÚSQUEDA SECUNDARIA DE PRODUCTOS (CON MAPEO GLOBAL DE ÍNDICES)
+      // 6. CATÁLOGOS Y BÚSQUEDA DE PRODUCTOS
       // =========================================================================
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
@@ -513,7 +469,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 8. FALLBACK GENERAL
+      // 7. FALLBACK GENERAL (GARANTIZADO)
       // =========================================================================
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
       await sock.sendMessage(senderNumberFull, { text: botResponseText });
