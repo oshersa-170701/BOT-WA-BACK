@@ -292,8 +292,8 @@ export class WhatsappService implements OnModuleInit {
           return;
         } else {
           quoteConfirmingProduct.status = 'Esperando Producto';
-          quoteConfirmingProduct.pending_product_id = null;
-          quoteConfirmingProduct.pending_product_name = null;
+          quoteConfirmingProduct.pending_product_id = 0;
+          quoteConfirmingProduct.pending_product_name = '';
           await this.quoteRepository.save(quoteConfirmingProduct);
 
           botResponseText = `Entendido. Escribe nuevamente el nombre del producto que buscas:`;
@@ -341,9 +341,9 @@ export class WhatsappService implements OnModuleInit {
           const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
           quoteConfirmingQty.products_requested = currentReq + newItem;
           
-          quoteConfirmingQty.pending_product_id = null;
-          quoteConfirmingQty.pending_product_name = null;
-          quoteConfirmingQty.pending_quantity = null;
+          quoteConfirmingQty.pending_product_id = 0;
+          quoteConfirmingQty.pending_product_name = '';
+          quoteConfirmingQty.pending_quantity = 0;
           quoteConfirmingQty.status = 'Preguntar Otro Producto';
           await this.quoteRepository.save(quoteConfirmingQty);
 
@@ -352,7 +352,7 @@ export class WhatsappService implements OnModuleInit {
           return;
         } else {
           quoteConfirmingQty.status = 'Esperando Cantidad';
-          quoteConfirmingQty.pending_quantity = null;
+          quoteConfirmingQty.pending_quantity = 0;
           await this.quoteRepository.save(quoteConfirmingQty);
 
           botResponseText = `Entendido. Escribe nuevamente la cantidad que deseas:`;
@@ -470,7 +470,7 @@ export class WhatsappService implements OnModuleInit {
       if (lead && lead.conversation_state === 'confirming_company') {
         if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
           lead.company_name = lead.pending_company_name;
-          lead.pending_company_name = null;
+          lead.pending_company_name = '';
           lead.conversation_state = 'assigned_to_human';
           await this.leadRepository.save(lead);
 
@@ -479,7 +479,7 @@ export class WhatsappService implements OnModuleInit {
           return;
         } else {
           lead.conversation_state = 'collecting_company';
-          lead.pending_company_name = null;
+          lead.pending_company_name = '';
           await this.leadRepository.save(lead);
 
           botResponseText = `Entendido. Por favor escribe nuevamente el nombre correcto de tu compañía o empresa:`;
