@@ -15,9 +15,12 @@ export class Lead {
   client_name: string; // Nombre capturado
 
   @Column({ type: 'varchar', length: 150, nullable: true })
-  company_name: string; // Empresa capturada
+  company_name: string; // Empresa final guardada
 
-  // Estados: 'collecting_name', 'collecting_company', 'assigned_to_human'
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  pending_company_name: string; // 💡 NUEVO: Almacena temporalmente el nombre antes de confirmar
+
+  // Estados: 'collecting_name', 'collecting_phone', 'collecting_company', 'confirming_company', 'assigned_to_human'
   @Column({ type: 'varchar', length: 50, default: 'collecting_name' })
   conversation_state: string; 
 

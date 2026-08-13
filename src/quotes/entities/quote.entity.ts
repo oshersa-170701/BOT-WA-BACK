@@ -14,15 +14,28 @@ export class Quote {
   @Column({ type: 'varchar', length: 150, nullable: true, default: 'Cliente' })
   client_name: string;
 
-  @Column({ type: 'text' })
-  products_requested: string; // Detalle de lo que pidió
+  @Column({ type: 'text', nullable: true })
+  products_requested: string; // Detalle acumulado de lo que pidió
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0.00 })
   total_estimated: number; // Precio total calculado
 
-  @Column({ type: 'varchar', length: 50, default: 'Pendiente' })
-  status: string; // Pendiente, Respondida, etc.
+  // 💡 NUEVOS CAMPOS PARA EL FLUJO INTERACTIVO DE COTIZACIÓN
+  @Column({ type: 'json', nullable: true })
+  search_results_cache: any[]; // Almacena temporalmente los productos encontrados en la búsqueda por similitud
 
+  @Column({ type: 'int', nullable: true })
+  pending_product_id: number; // ID del producto seleccionado temporalmente
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  pending_product_name: string; // Nombre del producto pendiente de confirmar
+
+  @Column({ type: 'int', nullable: true })
+  pending_quantity: number; // Cantidad pendiente de confirmar
+
+  @Column({ type: 'varchar', length: 50, default: 'Pendiente' })
+  status: string; // 'Esperando Nombre', 'Esperando Teléfono', 'Esperando Producto', 'Confirmando Producto', 'Confirmando Cantidad', 'Preguntar Otro Producto', 'Pendiente'
+  
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
