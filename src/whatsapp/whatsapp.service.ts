@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Like } from 'typeorm';
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -171,7 +171,7 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 1. FLUJO DE COTIZACIÓN ACTIVO (BARRERA ABSOLUTA E INQUEBRANTABLE)
+      // 1. FLUJO INTERACTIVO DE COTIZACIÓN (CON BARRERA INQUEBRANTABLE)
       // =========================================================================
       let pendingQuoteName = await this.quoteRepository.findOne({
         where: [
@@ -199,49 +199,226 @@ export class WhatsappService implements OnModuleInit {
 
       if (pendingQuotePhone) {
         pendingQuotePhone.client_phone = incomingText;
-        pendingQuotePhone.status = 'Esperando Productos';
+        pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
 
-        botResponseText = `¡Perfecto! Por favor indícanos el *producto y la cantidad* que deseas agregar a tu cotización (ej. *10 piezas de armella* o usa el número de nuestro *Catálogo*).\n\nCuando termines de agregar tus productos, escribe *Finalizar* para guardar tu cotización.`;
+        botResponseText = `¡Perfecto! Por favor escribe el *nombre del producto* que deseas buscar y agregar a tu cotización:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
-      let activeQuoteProducts = await this.quoteRepository.findOne({
+      // Estado 1: Esperando el texto de búsqueda del producto
+      let quoteWaitingProduct = await this.quoteRepository.findOne({
         where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Productos' }
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Producto' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Producto' }
         ]
       });
 
-      if (activeQuoteProducts) {
-        if (cleanIncomingText === 'finalizar' || cleanIncomingText === 'terminar' || cleanIncomingText === 'listo') {
-          if (!activeQuoteProducts.products_requested || activeQuoteProducts.products_requested.trim() === '') {
-            botResponseText = `⚠️ Aún no has agregado ningún producto. Escribe qué producto necesitas o escribe *Cancelar*.`;
-            await sock.sendMessage(senderNumberFull, { text: botResponseText });
-            return;
-          }
+      if (quoteWaitingProduct) {
+        const searchResults = await this.productRepository.find({
+          where: [
+            { whatsapp_phone: whatsappPhone, status: true, name: Like(`%${incomingText}%`) },
+            { whatsapp_phone: whatsappPhone, status: true, category: Like(`%${incomingText}%`) }
+          ],
+          take: 5
+        });
 
-          activeQuoteProducts.status = 'Pendiente';
-          await this.quoteRepository.save(activeQuoteProducts);
-
-          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen de tu solicitud:*\n${activeQuoteProducts.products_requested}\n\nUn asesor revisará tu solicitud y te enviará el presupuesto oficial en breve. ¡Muchas gracias!`;
+        if (searchResults.length === 0) {
+          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta escribir otro nombre o palabra clave:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
 
-        const currentProducts = activeQuoteProducts.products_requested ? activeQuoteProducts.products_requested + '\n• ' : '• ';
-        activeQuoteProducts.products_requested = currentProducts + incomingText;
-        await this.quoteRepository.save(activeQuoteProducts);
+        quoteWaitingProduct.search_results_cache = searchResults;
+        quoteWaitingProduct.status = 'Seleccionando Producto';
+        await this.quoteRepository.save(quoteWaitingProduct);
 
-        botResponseText = `🛒 Producto agregado correctamente a tu cotización.\n\n¿Deseas agregar **otro producto**? Escribe el siguiente producto o escribe *Finalizar* para concluir.`;
+        let listText = `🔍 Encontramos estos productos para *"${incomingText}"*:\n\n`;
+        searchResults.forEach((p, idx) => {
+          listText += `*${idx + 1}.* ${p.name} - $${p.price}\n`;
+        });
+        listText += `\n👉 Escribe el *número* del producto que deseas seleccionar:`;
+
+        await sock.sendMessage(senderNumberFull, { text: listText });
+        return;
+      }
+
+      // Estado 2: Seleccionando el número del producto de la lista
+      let quoteSelectingProduct = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' }
+        ]
+      });
+
+      if (quoteSelectingProduct) {
+        const selectionIndex = parseInt(incomingText, 10) - 1;
+        const cache = quoteSelectingProduct.search_results_cache || [];
+
+        if (isNaN(selectionIndex) || selectionIndex < 0 || selectionIndex >= cache.length) {
+          botResponseText = `⚠️ Selección inválida. Por favor escribe un número válido de la lista anterior:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+
+        const selectedProd = cache[selectionIndex];
+        quoteSelectingProduct.pending_product_id = selectedProd.id;
+        quoteSelectingProduct.pending_product_name = selectedProd.name;
+        quoteSelectingProduct.status = 'Confirmando Producto';
+        await this.quoteRepository.save(quoteSelectingProduct);
+
+        botResponseText = `Has seleccionado: *${selectedProd.name}* ($${selectedProd.price}).\n\n¿Es correcto este producto? Responde *Sí* o *No*:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
+      // Estado 3: Confirmando el producto seleccionado
+      let quoteConfirmingProduct = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' }
+        ]
+      });
+
+      if (quoteConfirmingProduct) {
+        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
+          quoteConfirmingProduct.status = 'Esperando Cantidad';
+          await this.quoteRepository.save(quoteConfirmingProduct);
+
+          botResponseText = `¡Excelente! ¿Qué *cantidad* de *${quoteConfirmingProduct.pending_product_name}* deseas agregar? (Escribe solo el número, ej. *5*):`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          quoteConfirmingProduct.status = 'Esperando Producto';
+          quoteConfirmingProduct.pending_product_id = null;
+          quoteConfirmingProduct.pending_product_name = null;
+          await this.quoteRepository.save(quoteConfirmingProduct);
+
+          botResponseText = `Entendido. Escribe nuevamente el nombre del producto que buscas:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+      }
+
+      // Estado 4: Esperando la cantidad
+      let quoteWaitingQty = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' }
+        ]
+      });
+
+      if (quoteWaitingQty) {
+        const qty = parseInt(incomingText, 10);
+        if (isNaN(qty) || qty <= 0) {
+          botResponseText = `⚠️ Cantidad inválida. Por favor escribe un número mayor a 0:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+
+        quoteWaitingQty.pending_quantity = qty;
+        quoteWaitingQty.status = 'Confirmando Cantidad';
+        await this.quoteRepository.save(quoteWaitingQty);
+
+        botResponseText = `Vas a agregar: *${qty} pieza(s)* de *${quoteWaitingQty.pending_product_name}*.\n\n¿Confirmas esta cantidad? Responde *Sí* o *No*:`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      // Estado 5: Confirmando la cantidad y agregando al acumulado
+      let quoteConfirmingQty = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' }
+        ]
+      });
+
+      if (quoteConfirmingQty) {
+        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
+          const newItem = `${quoteConfirmingQty.pending_quantity}x ${quoteConfirmingQty.pending_product_name}`;
+          const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
+          quoteConfirmingQty.products_requested = currentReq + newItem;
+          
+          quoteConfirmingQty.pending_product_id = null;
+          quoteConfirmingQty.pending_product_name = null;
+          quoteConfirmingQty.pending_quantity = null;
+          quoteConfirmingQty.status = 'Preguntar Otro Producto';
+          await this.quoteRepository.save(quoteConfirmingQty);
+
+          botResponseText = `✅ ¡Producto agregado con éxito!\n\n¿Deseas agregar *otro producto* o *finalizar* tu cotización? (Escribe *Agregar* o *Finalizar*):`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          quoteConfirmingQty.status = 'Esperando Cantidad';
+          quoteConfirmingQty.pending_quantity = null;
+          await this.quoteRepository.save(quoteConfirmingQty);
+
+          botResponseText = `Entendido. Escribe nuevamente la cantidad que deseas:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+      }
+
+      // Estado 6: Preguntar si desea otro producto o finalizar
+      let quoteAskAnother = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' }
+        ]
+      });
+
+      if (quoteAskAnother) {
+        if (cleanIncomingText.includes('agregar') || cleanIncomingText.includes('otro') || cleanIncomingText.includes('si')) {
+          quoteAskAnother.status = 'Esperando Producto';
+          await this.quoteRepository.save(quoteAskAnother);
+
+          botResponseText = `Perfecto. Escribe el nombre del *siguiente producto* que deseas buscar:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else if (cleanIncomingText.includes('finalizar') || cleanIncomingText.includes('terminar') || cleanIncomingText.includes('listo')) {
+          quoteAskAnother.status = 'Confirmando Finalizar';
+          await this.quoteRepository.save(quoteAskAnother);
+
+          botResponseText = `📋 *Resumen de tu cotización:*\n${quoteAskAnother.products_requested}\n\n¿Confirmas que deseas enviar y finalizar tu cotización? Responde *Sí* para confirmar:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          botResponseText = `⚠️ No entendí tu respuesta. Por favor escribe *Agregar* para otro producto o *Finalizar* para concluir:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+      }
+
+      // Estado 7: Confirmar finalización oficial
+      let quoteConfirmFinal = await this.quoteRepository.findOne({
+        where: [
+          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' },
+          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' }
+        ]
+      });
+
+      if (quoteConfirmFinal) {
+        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto' || cleanIncomingText === 'finalizar') {
+          quoteConfirmFinal.status = 'Pendiente';
+          await this.quoteRepository.save(quoteConfirmFinal);
+
+          botResponseText = `✅ ¡Cotización guardada y finalizada con éxito!\n\n📋 *Resumen final:*\n${quoteConfirmFinal.products_requested}\n\nUn asesor revisará tu solicitud y se pondrá en contacto contigo en breve. ¡Muchas gracias!`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          quoteConfirmFinal.status = 'Preguntar Otro Producto';
+          await this.quoteRepository.save(quoteConfirmFinal);
+
+          botResponseText = `Continuamos con tu cotización. ¿Deseas agregar *otro producto* o *finalizar*?`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+      }
+
       // =========================================================================
-      // 2. FLUJO DE LEAD / ASESOR ACTIVO
+      // 2. FLUJO INTERACTIVO DE LEAD / ASESOR (CON CONFIRMACIÓN DE EMPRESA)
       // =========================================================================
       let lead = await this.leadRepository.findOne({
         where: [
@@ -281,13 +458,34 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_company') {
-        lead.company_name = incomingText;
-        lead.conversation_state = 'assigned_to_human';
+        lead.pending_company_name = incomingText;
+        lead.conversation_state = 'confirming_company';
         await this.leadRepository.save(lead);
 
-        botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
+        botResponseText = `¿Es correcto el nombre de tu empresa: *${incomingText}*? Responde *Sí* para confirmar o *No* para corregirlo:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
+      }
+
+      if (lead && lead.conversation_state === 'confirming_company') {
+        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
+          lead.company_name = lead.pending_company_name;
+          lead.pending_company_name = null;
+          lead.conversation_state = 'assigned_to_human';
+          await this.leadRepository.save(lead);
+
+          botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          lead.conversation_state = 'collecting_company';
+          lead.pending_company_name = null;
+          await this.leadRepository.save(lead);
+
+          botResponseText = `Entendido. Por favor escribe nuevamente el nombre correcto de tu compañía o empresa:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
       }
 
       // =========================================================================
@@ -312,7 +510,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 4. BIENVENIDA O SALUDO INICIAL (SOLO PARA PRIMERA VEZ O "HOLA" ESTRICTO)
+      // 4. BIENVENIDA O SALUDO INICIAL
       // =========================================================================
       const previousChatsCount = await this.chatLogRepository.count({
         where: [
@@ -321,8 +519,6 @@ export class WhatsappService implements OnModuleInit {
         ]
       });
 
-      // 💡 CORRECCIÓN: La bienvenida solo salta si es cero chats previos o si dice estrictamente "hola". 
-      // Las palabras como "catalogo", "cotizacion" o "asesor" pasan de largo a sus módulos respectivos.
       const isWelcomeMessage = previousChatsCount === 0 || cleanIncomingText === 'hola';
 
       if (isWelcomeMessage) {
