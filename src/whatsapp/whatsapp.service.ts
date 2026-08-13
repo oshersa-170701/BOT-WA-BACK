@@ -171,7 +171,7 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 1. FLUJO INTERACTIVO DE COTIZACIÓN (CON BARRERA INQUEBRANTABLE)
+      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN (BARRERA INQUEBRANTABLE)
       // =========================================================================
       let pendingQuoteName = await this.quoteRepository.findOne({
         where: [
@@ -203,12 +203,12 @@ export class WhatsappService implements OnModuleInit {
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
 
-        botResponseText = `¡Perfecto! Por favor escribe el *nombre del producto* que deseas buscar y agregar a tu cotización:`;
+        botResponseText = `¡Perfecto! Por favor escribe el *nombre o descripción del producto* que deseas buscar:`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
 
-      // Estado 1: Esperando el texto de búsqueda del producto
+      // Estado: Esperando Producto a buscar
       let quoteWaitingProduct = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Producto' },
@@ -226,7 +226,7 @@ export class WhatsappService implements OnModuleInit {
         });
 
         if (searchResults.length === 0) {
-          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta escribir otro nombre o palabra clave:`;
+          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta escribir otro nombre:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
@@ -239,13 +239,13 @@ export class WhatsappService implements OnModuleInit {
         searchResults.forEach((p, idx) => {
           listText += `*${idx + 1}.* ${p.name} - $${p.price}\n`;
         });
-        listText += `\n👉 Escribe el *número* del producto que deseas seleccionar:`;
+        listText += `\n👉 Escribe el *número* del producto que deseas:`;
 
         await sock.sendMessage(senderNumberFull, { text: listText });
         return;
       }
 
-      // Estado 2: Seleccionando el número del producto de la lista
+      // Estado: Seleccionando el número del producto
       let quoteSelectingProduct = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' },
@@ -274,7 +274,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado 3: Confirmando el producto seleccionado
+      // Estado: Confirmando Producto
       let quoteConfirmingProduct = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' },
@@ -302,7 +302,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado 4: Esperando la cantidad
+      // Estado: Esperando Cantidad
       let quoteWaitingQty = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' },
@@ -327,7 +327,7 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado 5: Confirmando la cantidad y agregando al acumulado
+      // Estado: Confirmando Cantidad y guardando en acumulado
       let quoteConfirmingQty = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' },
@@ -361,7 +361,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado 6: Preguntar si desea otro producto o finalizar
+      // Estado: Preguntar si desea otro producto o finalizar
       let quoteAskAnother = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' },
@@ -391,7 +391,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado 7: Confirmar finalización oficial
+      // Estado: Confirmar finalización oficial de la cotización
       let quoteConfirmFinal = await this.quoteRepository.findOne({
         where: [
           { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' },
@@ -418,7 +418,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 2. FLUJO INTERACTIVO DE LEAD / ASESOR (CON CONFIRMACIÓN DE EMPRESA)
+      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (CON CONFIRMACIÓN DE EMPRESA)
       // =========================================================================
       let lead = await this.leadRepository.findOne({
         where: [
