@@ -19,10 +19,19 @@ export class QuotesService {
   }
 
   async findAllByPhone(whatsappPhone: string) {
-    return await this.quoteRepository.find({
+    const quotes = await this.quoteRepository.find({
       where: { whatsapp_phone: whatsappPhone },
       order: { createdAt: 'DESC' },
     });
+
+    // "phone_display" es lo que el panel debe pintar en la columna TELÉFONO:
+    // el número que el cliente escribió a mano (contact_phone). Si aún no
+    // lo ha dado (está a mitad del flujo), mostramos el JID real como
+    // respaldo para no dejar la columna vacía.
+    return quotes.map((quote) => ({
+      ...quote,
+      phone_display: quote.contact_phone || quote.client_phone,
+    }));
   }
 
   async findOne(id: number) {

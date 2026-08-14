@@ -19,7 +19,7 @@ export class LeadsService {
 
     // "phone_display" es lo que el panel debe pintar en la columna TELÉFONO:
     // el número que el cliente escribió a mano (contact_phone). Si aún no
-    // lo ha dado (está a mitad del flujo), mostramos el JID real como
+    // lo ha dado (está a mitad del flujo),a mostramos el JID real como
     // respaldo para no dejar la columna vacía.
     return leads.map((lead) => ({
       ...lead,

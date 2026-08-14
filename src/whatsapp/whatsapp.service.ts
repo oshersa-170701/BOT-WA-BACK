@@ -212,6 +212,9 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_name') {
+        if (await this.tryHandleLeadEscape(lead, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         lead.client_name = incomingText;
         lead.conversation_state = 'collecting_phone';
         await this.leadRepository.save(lead);
@@ -222,6 +225,9 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_phone') {
+        if (await this.tryHandleLeadEscape(lead, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         // FIX: antes se hacía "lead.client_phone = incomingText", lo cual
         // rompía la búsqueda por phoneVariants en el siguiente mensaje.
         lead.contact_phone = incomingText;
@@ -234,6 +240,9 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_company') {
+        if (await this.tryHandleLeadEscape(lead, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         lead.pending_company_name = incomingText;
         lead.conversation_state = 'confirming_company';
         await this.leadRepository.save(lead);
@@ -244,6 +253,9 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'confirming_company') {
+        if (await this.tryHandleLeadEscape(lead, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
           lead.company_name = lead.pending_company_name;
           lead.pending_company_name = '';
@@ -272,6 +284,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuoteName) {
+        if (await this.tryHandleQuoteEscape(pendingQuoteName, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         pendingQuoteName.client_name = incomingText;
         pendingQuoteName.status = 'Esperando Teléfono';
         await this.quoteRepository.save(pendingQuoteName);
@@ -286,6 +301,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuotePhone) {
+        if (await this.tryHandleQuoteEscape(pendingQuotePhone, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         // FIX: antes se hacía "pendingQuotePhone.client_phone = incomingText",
         // lo cual rompía la búsqueda de la cotización activa en los siguientes
         // mensajes (por eso el bot "olvidaba" que estaba cotizando y caía en
@@ -305,6 +323,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteWaitingProduct) {
+        if (await this.tryHandleQuoteEscape(quoteWaitingProduct, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || cleanIncomingText === 'ver todos') {
           this.catalogPages.set(cleanSenderPhone, 0);
           await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
@@ -373,6 +394,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteSelectingProduct) {
+        if (await this.tryHandleQuoteEscape(quoteSelectingProduct, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         const selectionIndex = parseInt(incomingText, 10) - 1;
         const cache = quoteSelectingProduct.search_results_cache || [];
 
@@ -398,6 +422,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteConfirmingProduct) {
+        if (await this.tryHandleQuoteEscape(quoteConfirmingProduct, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
           quoteConfirmingProduct.status = 'Esperando Cantidad';
           await this.quoteRepository.save(quoteConfirmingProduct);
@@ -422,6 +449,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteWaitingQty) {
+        if (await this.tryHandleQuoteEscape(quoteWaitingQty, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         const qty = parseInt(incomingText, 10);
         if (isNaN(qty) || qty <= 0) {
           botResponseText = `⚠️ Cantidad inválida. Por favor escribe un número mayor a 0:`;
@@ -443,6 +473,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteConfirmingQty) {
+        if (await this.tryHandleQuoteEscape(quoteConfirmingQty, cleanIncomingText, ['terminar', 'finalizar'], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
           const newItem = `${quoteConfirmingQty.pending_quantity}x ${quoteConfirmingQty.pending_product_name}`;
           const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
@@ -473,6 +506,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteAskAnother) {
+        if (await this.tryHandleQuoteEscape(quoteAskAnother, cleanIncomingText, [], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText.includes('agregar') || cleanIncomingText.includes('otro') || cleanIncomingText.includes('si')) {
           quoteAskAnother.status = 'Esperando Producto';
           await this.quoteRepository.save(quoteAskAnother);
@@ -499,6 +535,9 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteConfirmFinal) {
+        if (await this.tryHandleQuoteEscape(quoteConfirmFinal, cleanIncomingText, [], senderNumberFull, sock, settings)) {
+          return;
+        }
         if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto' || cleanIncomingText === 'finalizar') {
           quoteConfirmFinal.status = 'Pendiente';
           await this.quoteRepository.save(quoteConfirmFinal);
@@ -706,6 +745,58 @@ export class WhatsappService implements OnModuleInit {
     } catch (error) {
       console.error('Error procesando mensaje con Baileys:', error);
     }
+  }
+
+  // =========================================================================
+  // ESCAPE UNIVERSAL: permite escribir "Hola" (reiniciar) o "Salir/Terminar/
+  // Cancelar" (abandonar) en CUALQUIER paso de los flujos de asesor o
+  // cotización, sin que el mensaje se interprete como texto de ese paso
+  // (nombre, producto, cantidad, etc.). Antes, escribir "Hola" o "Terminar"
+  // mientras se esperaba un producto se buscaba como si fuera un producto.
+  private async tryHandleLeadEscape(
+    lead: Lead,
+    cleanIncomingText: string,
+    extraExitWords: string[],
+    senderNumberFull: string,
+    sock: any,
+    settings: BotSetting | null,
+  ): Promise<boolean> {
+    const exitWords = ['salir', 'cancelar', 'adios', 'adiós', ...extraExitWords];
+    const isHola = cleanIncomingText === 'hola';
+    if (!isHola && !exitWords.includes(cleanIncomingText)) return false;
+
+    lead.conversation_state = isHola ? 'active' : 'assigned_to_human';
+    await this.leadRepository.save(lead);
+
+    const botResponseText = isHola
+      ? (settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.')
+      : `👋 Proceso cancelado. Si necesitas algo más, escribe *Hola* o *Catálogo*.`;
+
+    await sock.sendMessage(senderNumberFull, { text: botResponseText });
+    return true;
+  }
+
+  private async tryHandleQuoteEscape(
+    quote: Quote,
+    cleanIncomingText: string,
+    extraExitWords: string[],
+    senderNumberFull: string,
+    sock: any,
+    settings: BotSetting | null,
+  ): Promise<boolean> {
+    const exitWords = ['salir', 'cancelar', 'adios', 'adiós', ...extraExitWords];
+    const isHola = cleanIncomingText === 'hola';
+    if (!isHola && !exitWords.includes(cleanIncomingText)) return false;
+
+    quote.status = 'Cancelada';
+    await this.quoteRepository.save(quote);
+
+    const botResponseText = isHola
+      ? (settings?.welcome_message || '¡Hola! Bienvenido a nuestro servicio automático.\n\nPuedes escribir *Catálogo*, *Cotización* o *Asesor*.')
+      : `👋 Cotización cancelada. Si necesitas algo más, escribe *Hola* o *Catálogo*.`;
+
+    await sock.sendMessage(senderNumberFull, { text: botResponseText });
+    return true;
   }
 
   private async sendCatalogPage(whatsappPhone: string, senderNumberFull: string, cleanSenderPhone: string, sock: any, page: number) {
