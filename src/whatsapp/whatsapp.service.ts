@@ -172,7 +172,7 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN (BARRERA DUAL ESTRICTA)
+      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN
       // =========================================================================
       let pendingQuoteName = await this.quoteRepository.findOne({
         where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
@@ -193,12 +193,12 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuotePhone) {
-        pendingQuotePhone.client_phone = cleanSenderPhone;
+        pendingQuotePhone.client_phone = incomingText; // Guarda el teléfono ingresado
         pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
 
-        botResponseText = `¡Perfecto! Por favor escribe el *nombre o descripción del producto* que deseas buscar:`;
+        botResponseText = `¡Perfecto! Escribe el *nombre o descripción del producto* que deseas buscar.\n\n*(💡 Consejo: Si deseas ver la lista completa de productos, escribe "Catálogo")*`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
@@ -208,6 +208,12 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (quoteWaitingProduct) {
+        if (cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || cleanIncomingText === 'ver todos') {
+          this.catalogPages.set(cleanSenderPhone, 0);
+          await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
+          return;
+        }
+
         const searchResults = await this.productRepository.find({
           where: [
             { whatsapp_phone: whatsappPhone, status: true, name: Like(`%${incomingText}%`) },
@@ -217,7 +223,7 @@ export class WhatsappService implements OnModuleInit {
         });
 
         if (searchResults.length === 0) {
-          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta escribir otro nombre:`;
+          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta otro nombre o escribe *Catálogo* para ver la lista:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
@@ -385,7 +391,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (CON BÚSQUEDA DUAL)
+      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR
       // =========================================================================
       let lead = await this.leadRepository.findOne({
         where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
@@ -412,7 +418,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText;
+        lead.client_phone = incomingText; // 💡 Corrección: Guarda correctamente el teléfono ingresado
         lead.conversation_state = 'collecting_company';
         await this.leadRepository.save(lead);
 
