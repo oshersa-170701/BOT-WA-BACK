@@ -295,7 +295,7 @@ export class WhatsappService implements OnModuleInit {
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
 
-        botResponseText = `¡Perfecto! Escribe el *nombre o descripción del producto* que deseas buscar.\n\n*(💡 Consejo: Si deseas ver la lista de productos, escribe "Catálogo")*`;
+        botResponseText = `¡Perfecto! Escribe el *nombre, descripción o número* del producto que deseas buscar.\n\n*(💡 Consejo: Si deseas ver la lista de productos, escribe "Catálogo")*`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
@@ -308,7 +308,34 @@ export class WhatsappService implements OnModuleInit {
         if (cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || cleanIncomingText === 'ver todos') {
           this.catalogPages.set(cleanSenderPhone, 0);
           await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
-          botResponseText = `\n\n*(Escribe el nombre del producto que deseas agregar a tu cotización)*`;
+          botResponseText = `\n\n*(Escribe el nombre o el número del producto que deseas agregar a tu cotización)*`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+
+        // NUEVO: si el cliente escribe un número, lo tomamos como el número
+        // global del catálogo (mismo orden que usa sendCatalogPage) y
+        // seleccionamos el producto directamente, sin pasar por la búsqueda.
+        if (/^\d+$/.test(cleanIncomingText)) {
+          const catalogProducts = await this.productRepository.find({
+            where: { whatsapp_phone: whatsappPhone, status: true },
+            order: { name: 'ASC' }
+          });
+          const catalogIndex = parseInt(cleanIncomingText, 10) - 1;
+
+          if (catalogIndex >= 0 && catalogIndex < catalogProducts.length) {
+            const selectedByNumber = catalogProducts[catalogIndex];
+            quoteWaitingProduct.pending_product_id = selectedByNumber.id;
+            quoteWaitingProduct.pending_product_name = selectedByNumber.name;
+            quoteWaitingProduct.status = 'Confirmando Producto';
+            await this.quoteRepository.save(quoteWaitingProduct);
+
+            botResponseText = `Has seleccionado: *${selectedByNumber.name}* ($${selectedByNumber.price}).\n\n¿Es correcto este producto? Responde *Sí* o *No*:`;
+            await sock.sendMessage(senderNumberFull, { text: botResponseText });
+            return;
+          }
+
+          botResponseText = `⚠️ No encontramos un producto con el número *${cleanIncomingText}*. Escribe *Catálogo* para ver la lista o escribe el nombre del producto:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
@@ -450,7 +477,7 @@ export class WhatsappService implements OnModuleInit {
           quoteAskAnother.status = 'Esperando Producto';
           await this.quoteRepository.save(quoteAskAnother);
 
-          botResponseText = `Perfecto. Escribe el nombre del *siguiente producto* que deseas buscar:\n\n*(💡 O escribe "Catálogo" si deseas consultar la lista)*`;
+          botResponseText = `Perfecto. Escribe el nombre o número del *siguiente producto* que deseas buscar:\n\n*(💡 O escribe "Catálogo" si deseas consultar la lista)*`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         } else if (cleanIncomingText.includes('finalizar') || cleanIncomingText.includes('terminar') || cleanIncomingText.includes('listo')) {
