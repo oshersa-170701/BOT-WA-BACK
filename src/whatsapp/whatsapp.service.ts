@@ -122,7 +122,7 @@ export class WhatsappService implements OnModuleInit {
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
-
+        
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
@@ -154,10 +154,10 @@ export class WhatsappService implements OnModuleInit {
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
       const phoneVariants = [senderNumberFull, cleanSenderPhone, `${cleanSenderPhone}@s.whatsapp.net`, `${cleanSenderPhone}@c.us`];
 
-      const messageContent =
-        msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.imageMessage?.caption ||
+      const messageContent = 
+        msg.message?.conversation || 
+        msg.message?.extendedTextMessage?.text || 
+        msg.message?.imageMessage?.caption || 
         msg.message?.videoMessage?.caption ||
         msg.message?.ephemeralMessage?.message?.conversation ||
         msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text || '';
@@ -177,6 +177,25 @@ export class WhatsappService implements OnModuleInit {
       let lead = await this.leadRepository.findOne({
         where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
       });
+
+      // Si detecta palabra clave de asesor, inicializa o fuerza el estado a collecting_name
+      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
+      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
+        if (!lead) {
+          lead = this.leadRepository.create({
+            client_phone: cleanSenderPhone,
+            whatsapp_phone: whatsappPhone,
+            conversation_state: 'collecting_name'
+          });
+        } else {
+          lead.conversation_state = 'collecting_name';
+        }
+        await this.leadRepository.save(lead);
+
+        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
 
       if (lead && lead.conversation_state === 'assigned_to_human') {
         const reactivationTriggers = ['hola', 'catálogo', 'catalogo', 'bot', 'menu', 'menú'];
@@ -199,7 +218,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText;
+        lead.client_phone = incomingText; 
         lead.conversation_state = 'collecting_company';
         await this.leadRepository.save(lead);
 
@@ -261,7 +280,7 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuotePhone) {
-        pendingQuotePhone.client_phone = incomingText;
+        pendingQuotePhone.client_phone = incomingText; 
         pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
@@ -279,7 +298,6 @@ export class WhatsappService implements OnModuleInit {
         if (cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || cleanIncomingText === 'ver todos') {
           this.catalogPages.set(cleanSenderPhone, 0);
           await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
-          // 💡 Aseguramos que conserve el estado de cotización al consultar el catálogo
           botResponseText = `\n\n*(Escribe el nombre del producto que deseas agregar a tu cotización)*`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
@@ -392,7 +410,7 @@ export class WhatsappService implements OnModuleInit {
           const newItem = `${quoteConfirmingQty.pending_quantity}x ${quoteConfirmingQty.pending_product_name}`;
           const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
           quoteConfirmingQty.products_requested = currentReq + newItem;
-
+          
           quoteConfirmingQty.pending_product_id = 0;
           quoteConfirmingQty.pending_product_name = '';
           quoteConfirmingQty.pending_quantity = 0;
@@ -513,32 +531,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 5. DETECCIÓN AUTOMÁTICA DE ASESOR / ASOCIADO
-      // =========================================================================
-      const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
-      if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
-        let existingLead = await this.leadRepository.findOne({
-          where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
-        });
-
-        if (!existingLead) {
-          existingLead = this.leadRepository.create({
-            client_phone: cleanSenderPhone,
-            whatsapp_phone: whatsappPhone,
-            conversation_state: 'collecting_name'
-          });
-        } else {
-          existingLead.conversation_state = 'collecting_name';
-        }
-        await this.leadRepository.save(existingLead);
-
-        botResponseText = `🤝 Con mucho gusto te comunicaremos con un asociado o asesor humano. Para empezar, por favor indícanos: *¿Cuál es tu nombre?*`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      // =========================================================================
-      // 6. PALABRAS CLAVE CONFIGURADAS
+      // 5. PALABRAS CLAVE CONFIGURADAS
       // =========================================================================
       const keywords = await this.keywordRepository.find({
         where: { whatsapp_phone: whatsappPhone, is_active: true }
@@ -588,7 +581,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 7. CATÁLOGOS Y BÚSQUEDA DE PRODUCTOS
+      // 6. CATÁLOGOS Y BÚSQUEDA DE PRODUCTOS
       // =========================================================================
       const allProducts = await this.productRepository.find({
         where: { whatsapp_phone: whatsappPhone, status: true },
@@ -661,7 +654,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 8. FALLBACK GENERAL
+      // 7. FALLBACK GENERAL
       // =========================================================================
       botResponseText = settings?.fallback_message || 'Lo siento, no entendí tu mensaje. Escribe *Catálogo* para ver productos o *Terminar* para cerrar la sesión.';
       await sock.sendMessage(senderNumberFull, { text: botResponseText });
