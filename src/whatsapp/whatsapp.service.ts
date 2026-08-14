@@ -122,7 +122,7 @@ export class WhatsappService implements OnModuleInit {
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
-        
+
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
@@ -154,10 +154,10 @@ export class WhatsappService implements OnModuleInit {
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
       const phoneVariants = [senderNumberFull, cleanSenderPhone, `${cleanSenderPhone}@s.whatsapp.net`, `${cleanSenderPhone}@c.us`];
 
-      const messageContent = 
-        msg.message?.conversation || 
-        msg.message?.extendedTextMessage?.text || 
-        msg.message?.imageMessage?.caption || 
+      const messageContent =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
         msg.message?.videoMessage?.caption ||
         msg.message?.ephemeralMessage?.message?.conversation ||
         msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text || '';
@@ -174,6 +174,10 @@ export class WhatsappService implements OnModuleInit {
       // =========================================================================
       // 1. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (PRIORIDAD ABSOLUTA)
       // =========================================================================
+      // NOTA: "client_phone" es la llave de búsqueda (JID real de WhatsApp) y
+      // NUNCA debe sobrescribirse con texto libre que escriba el cliente, o se
+      // pierde el registro en el siguiente mensaje. El teléfono de contacto que
+      // el cliente proporciona manualmente se guarda aparte en "contact_phone".
       let lead = await this.leadRepository.findOne({
         where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
       });
@@ -218,7 +222,9 @@ export class WhatsappService implements OnModuleInit {
       }
 
       if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText; 
+        // FIX: antes se hacía "lead.client_phone = incomingText", lo cual
+        // rompía la búsqueda por phoneVariants en el siguiente mensaje.
+        lead.contact_phone = incomingText;
         lead.conversation_state = 'collecting_company';
         await this.leadRepository.save(lead);
 
@@ -280,7 +286,11 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuotePhone) {
-        pendingQuotePhone.client_phone = incomingText; 
+        // FIX: antes se hacía "pendingQuotePhone.client_phone = incomingText",
+        // lo cual rompía la búsqueda de la cotización activa en los siguientes
+        // mensajes (por eso el bot "olvidaba" que estaba cotizando y caía en
+        // la sección 6 de catálogo al escribir un número).
+        pendingQuotePhone.contact_phone = incomingText;
         pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
@@ -410,7 +420,7 @@ export class WhatsappService implements OnModuleInit {
           const newItem = `${quoteConfirmingQty.pending_quantity}x ${quoteConfirmingQty.pending_product_name}`;
           const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
           quoteConfirmingQty.products_requested = currentReq + newItem;
-          
+
           quoteConfirmingQty.pending_product_id = 0;
           quoteConfirmingQty.pending_product_name = '';
           quoteConfirmingQty.pending_quantity = 0;

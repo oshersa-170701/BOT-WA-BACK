@@ -33,6 +33,10 @@ export class Quote {
   @Column({ type: 'int', nullable: true })
   pending_quantity: number; // Cantidad pendiente de confirmar
 
+@Column({ type: 'varchar', nullable: true })
+contact_phone: string;
+
+
   @Column({ type: 'varchar', length: 50, default: 'Pendiente' })
   status: string; // 'Esperando Nombre', 'Esperando Teléfono', 'Esperando Producto', 'Confirmando Producto', 'Confirmando Cantidad', 'Preguntar Otro Producto', 'Pendiente'
   

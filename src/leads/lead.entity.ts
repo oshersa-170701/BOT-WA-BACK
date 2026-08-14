@@ -24,6 +24,9 @@ export class Lead {
   @Column({ type: 'varchar', length: 50, default: 'collecting_name' })
   conversation_state: string; 
 
+  @Column({ type: 'varchar', nullable: true })
+contact_phone: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
