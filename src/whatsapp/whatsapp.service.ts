@@ -122,7 +122,7 @@ export class WhatsappService implements OnModuleInit {
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
-        
+
         if (!msg.message || msg.key.fromMe) return;
 
         const senderNumber = msg.key.remoteJid;
@@ -154,10 +154,10 @@ export class WhatsappService implements OnModuleInit {
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
       const phoneVariants = [senderNumberFull, cleanSenderPhone, `${cleanSenderPhone}@s.whatsapp.net`, `${cleanSenderPhone}@c.us`];
 
-      const messageContent = 
-        msg.message?.conversation || 
-        msg.message?.extendedTextMessage?.text || 
-        msg.message?.imageMessage?.caption || 
+      const messageContent =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
         msg.message?.videoMessage?.caption ||
         msg.message?.ephemeralMessage?.message?.conversation ||
         msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text || '';
@@ -172,7 +172,75 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN
+      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (PRIORIDAD ABSOLUTA)
+      // =========================================================================
+      let lead = await this.leadRepository.findOne({
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
+      });
+
+      if (lead && lead.conversation_state === 'assigned_to_human') {
+        const reactivationTriggers = ['hola', 'catálogo', 'catalogo', 'bot', 'menu', 'menú'];
+        if (reactivationTriggers.some(t => cleanIncomingText.includes(t))) {
+          lead.conversation_state = 'active';
+          await this.leadRepository.save(lead);
+        } else {
+          return;
+        }
+      }
+
+      if (lead && lead.conversation_state === 'collecting_name') {
+        lead.client_name = incomingText;
+        lead.conversation_state = 'collecting_phone';
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      if (lead && lead.conversation_state === 'collecting_phone') {
+        lead.client_phone = incomingText;
+        lead.conversation_state = 'collecting_company';
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      if (lead && lead.conversation_state === 'collecting_company') {
+        lead.pending_company_name = incomingText;
+        lead.conversation_state = 'confirming_company';
+        await this.leadRepository.save(lead);
+
+        botResponseText = `¿Es correcto el nombre de tu empresa: *${incomingText}*? Responde *Sí* para confirmar o *No* para corregirlo:`;
+        await sock.sendMessage(senderNumberFull, { text: botResponseText });
+        return;
+      }
+
+      if (lead && lead.conversation_state === 'confirming_company') {
+        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
+          lead.company_name = lead.pending_company_name;
+          lead.pending_company_name = '';
+          lead.conversation_state = 'assigned_to_human';
+          await this.leadRepository.save(lead);
+
+          botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        } else {
+          lead.conversation_state = 'collecting_company';
+          lead.pending_company_name = '';
+          await this.leadRepository.save(lead);
+
+          botResponseText = `Entendido. Por favor escribe nuevamente el nombre correcto de tu compañía o empresa:`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
+          return;
+        }
+      }
+
+      // =========================================================================
+      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN
       // =========================================================================
       let pendingQuoteName = await this.quoteRepository.findOne({
         where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
@@ -193,12 +261,12 @@ export class WhatsappService implements OnModuleInit {
       });
 
       if (pendingQuotePhone) {
-        pendingQuotePhone.client_phone = incomingText; // Guarda el teléfono ingresado
+        pendingQuotePhone.client_phone = incomingText;
         pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
 
-        botResponseText = `¡Perfecto! Escribe el *nombre o descripción del producto* que deseas buscar.\n\n*(💡 Consejo: Si deseas ver la lista completa de productos, escribe "Catálogo")*`;
+        botResponseText = `¡Perfecto! Escribe el *nombre o descripción del producto* que deseas buscar.\n\n*(💡 Consejo: Si deseas ver la lista de productos, escribe "Catálogo")*`;
         await sock.sendMessage(senderNumberFull, { text: botResponseText });
         return;
       }
@@ -211,6 +279,9 @@ export class WhatsappService implements OnModuleInit {
         if (cleanIncomingText === 'catalogo' || cleanIncomingText === 'catálogo' || cleanIncomingText === 'ver todos') {
           this.catalogPages.set(cleanSenderPhone, 0);
           await this.sendCatalogPage(whatsappPhone, senderNumberFull, cleanSenderPhone, sock, 0);
+          // 💡 Aseguramos que conserve el estado de cotización al consultar el catálogo
+          botResponseText = `\n\n*(Escribe el nombre del producto que deseas agregar a tu cotización)*`;
+          await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
 
@@ -223,7 +294,7 @@ export class WhatsappService implements OnModuleInit {
         });
 
         if (searchResults.length === 0) {
-          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta otro nombre o escribe *Catálogo* para ver la lista:`;
+          botResponseText = `❌ No encontramos productos similares con "${incomingText}". Intenta escribir otro nombre o escribe *Catálogo* para ver la lista:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
@@ -321,7 +392,7 @@ export class WhatsappService implements OnModuleInit {
           const newItem = `${quoteConfirmingQty.pending_quantity}x ${quoteConfirmingQty.pending_product_name}`;
           const currentReq = quoteConfirmingQty.products_requested ? quoteConfirmingQty.products_requested + '\n• ' : '• ';
           quoteConfirmingQty.products_requested = currentReq + newItem;
-          
+
           quoteConfirmingQty.pending_product_id = 0;
           quoteConfirmingQty.pending_product_name = '';
           quoteConfirmingQty.pending_quantity = 0;
@@ -351,7 +422,7 @@ export class WhatsappService implements OnModuleInit {
           quoteAskAnother.status = 'Esperando Producto';
           await this.quoteRepository.save(quoteAskAnother);
 
-          botResponseText = `Perfecto. Escribe el nombre del *siguiente producto* que deseas buscar:`;
+          botResponseText = `Perfecto. Escribe el nombre del *siguiente producto* que deseas buscar:\n\n*(💡 O escribe "Catálogo" si deseas consultar la lista)*`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         } else if (cleanIncomingText.includes('finalizar') || cleanIncomingText.includes('terminar') || cleanIncomingText.includes('listo')) {
@@ -385,74 +456,6 @@ export class WhatsappService implements OnModuleInit {
           await this.quoteRepository.save(quoteConfirmFinal);
 
           botResponseText = `Continuamos con tu cotización. ¿Deseas agregar *otro producto* o *finalizar*?`;
-          await sock.sendMessage(senderNumberFull, { text: botResponseText });
-          return;
-        }
-      }
-
-      // =========================================================================
-      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR
-      // =========================================================================
-      let lead = await this.leadRepository.findOne({
-        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
-      });
-
-      if (lead && lead.conversation_state === 'assigned_to_human') {
-        const reactivationTriggers = ['hola', 'catálogo', 'catalogo', 'bot', 'menu', 'menú'];
-        if (reactivationTriggers.some(t => cleanIncomingText.includes(t))) {
-          lead.conversation_state = 'active';
-          await this.leadRepository.save(lead);
-        } else {
-          return;
-        }
-      }
-
-      if (lead && lead.conversation_state === 'collecting_name') {
-        lead.client_name = incomingText;
-        lead.conversation_state = 'collecting_phone';
-        await this.leadRepository.save(lead);
-
-        botResponseText = `¡Mucho gusto, ${incomingText}! Ahora, por favor indícanos un *número telefónico de contacto*:`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      if (lead && lead.conversation_state === 'collecting_phone') {
-        lead.client_phone = incomingText; // 💡 Corrección: Guarda correctamente el teléfono ingresado
-        lead.conversation_state = 'collecting_company';
-        await this.leadRepository.save(lead);
-
-        botResponseText = `¿A qué compañía, negocio o empresa pertenece?`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      if (lead && lead.conversation_state === 'collecting_company') {
-        lead.pending_company_name = incomingText;
-        lead.conversation_state = 'confirming_company';
-        await this.leadRepository.save(lead);
-
-        botResponseText = `¿Es correcto el nombre de tu empresa: *${incomingText}*? Responde *Sí* para confirmar o *No* para corregirlo:`;
-        await sock.sendMessage(senderNumberFull, { text: botResponseText });
-        return;
-      }
-
-      if (lead && lead.conversation_state === 'confirming_company') {
-        if (cleanIncomingText === 'si' || cleanIncomingText === 'sí' || cleanIncomingText === 'correcto') {
-          lead.company_name = lead.pending_company_name;
-          lead.pending_company_name = '';
-          lead.conversation_state = 'assigned_to_human';
-          await this.leadRepository.save(lead);
-
-          botResponseText = `✅ ¡Información registrada con éxito!\n\n🤝 En unos momentos un asesor se comunicará contigo. ¡Gracias!`;
-          await sock.sendMessage(senderNumberFull, { text: botResponseText });
-          return;
-        } else {
-          lead.conversation_state = 'collecting_company';
-          lead.pending_company_name = '';
-          await this.leadRepository.save(lead);
-
-          botResponseText = `Entendido. Por favor escribe nuevamente el nombre correcto de tu compañía o empresa:`;
           await sock.sendMessage(senderNumberFull, { text: botResponseText });
           return;
         }
