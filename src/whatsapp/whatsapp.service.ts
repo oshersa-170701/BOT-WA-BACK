@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like } from 'typeorm';
+import { Repository, Like, In } from 'typeorm';
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -152,7 +152,8 @@ export class WhatsappService implements OnModuleInit {
 
       const senderNumberFull = msg.key.remoteJid || '';
       const cleanSenderPhone = senderNumberFull.replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').trim();
-      
+      const phoneVariants = [senderNumberFull, cleanSenderPhone, `${cleanSenderPhone}@s.whatsapp.net`, `${cleanSenderPhone}@c.us`];
+
       const messageContent = 
         msg.message?.conversation || 
         msg.message?.extendedTextMessage?.text || 
@@ -171,13 +172,10 @@ export class WhatsappService implements OnModuleInit {
       const cleanIncomingText = normalizeStr(incomingText);
 
       // =========================================================================
-      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN (BARRERA INQUEBRANTABLE)
+      // 1. MÁQUINA DE ESTADOS INTERACTIVA DE COTIZACIÓN (BARRERA DUAL ESTRICTA)
       // =========================================================================
       let pendingQuoteName = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Nombre' }
       });
 
       if (pendingQuoteName) {
@@ -191,14 +189,11 @@ export class WhatsappService implements OnModuleInit {
       }
 
       let pendingQuotePhone = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Teléfono' }
       });
 
       if (pendingQuotePhone) {
-        pendingQuotePhone.client_phone = incomingText;
+        pendingQuotePhone.client_phone = cleanSenderPhone;
         pendingQuotePhone.status = 'Esperando Producto';
         pendingQuotePhone.products_requested = '';
         await this.quoteRepository.save(pendingQuotePhone);
@@ -208,12 +203,8 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado: Esperando Producto a buscar
       let quoteWaitingProduct = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Producto' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Producto' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Producto' }
       });
 
       if (quoteWaitingProduct) {
@@ -245,12 +236,8 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado: Seleccionando el número del producto
       let quoteSelectingProduct = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Seleccionando Producto' }
       });
 
       if (quoteSelectingProduct) {
@@ -274,12 +261,8 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado: Confirmando Producto
       let quoteConfirmingProduct = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Confirmando Producto' }
       });
 
       if (quoteConfirmingProduct) {
@@ -302,12 +285,8 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado: Esperando Cantidad
       let quoteWaitingQty = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Esperando Cantidad' }
       });
 
       if (quoteWaitingQty) {
@@ -327,12 +306,8 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
-      // Estado: Confirmando Cantidad y guardando en acumulado
       let quoteConfirmingQty = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Confirmando Cantidad' }
       });
 
       if (quoteConfirmingQty) {
@@ -361,12 +336,8 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado: Preguntar si desea otro producto o finalizar
       let quoteAskAnother = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Preguntar Otro Producto' }
       });
 
       if (quoteAskAnother) {
@@ -391,12 +362,8 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Estado: Confirmar finalización oficial de la cotización
       let quoteConfirmFinal = await this.quoteRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone, status: 'Confirmando Finalizar' }
       });
 
       if (quoteConfirmFinal) {
@@ -418,13 +385,10 @@ export class WhatsappService implements OnModuleInit {
       }
 
       // =========================================================================
-      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (CON CONFIRMACIÓN DE EMPRESA)
+      // 2. MÁQUINA DE ESTADOS INTERACTIVA DE LEAD / ASESOR (CON BÚSQUEDA DUAL)
       // =========================================================================
       let lead = await this.leadRepository.findOne({
-        where: [
-          { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
-          { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-        ]
+        where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
       });
 
       if (lead && lead.conversation_state === 'assigned_to_human') {
@@ -545,10 +509,7 @@ export class WhatsappService implements OnModuleInit {
       const advisorTriggers = ['asesor', 'proveedor', 'asociado', 'humano', 'representante'];
       if (advisorTriggers.some(trigger => cleanIncomingText.includes(trigger))) {
         let existingLead = await this.leadRepository.findOne({
-          where: [
-            { client_phone: senderNumberFull, whatsapp_phone: whatsappPhone },
-            { client_phone: cleanSenderPhone, whatsapp_phone: whatsappPhone }
-          ]
+          where: { client_phone: In(phoneVariants), whatsapp_phone: whatsappPhone }
         });
 
         if (!existingLead) {
@@ -778,7 +739,7 @@ export class WhatsappService implements OnModuleInit {
 
       return { success: true, message: 'Sesión cerrada y desvinculada correctamente' };
     } catch (error) {
-      console.error('Error en disconnectWhatsApp:', error);
+      console.error('Error in disconnectWhatsApp:', error);
       return { success: false, message: 'Error al cerrar sesión' };
     }
   }
